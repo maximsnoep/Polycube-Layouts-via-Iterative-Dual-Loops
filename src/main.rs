@@ -825,7 +825,7 @@ fn draw_gizmos(
                                 configuration.scale,
                                 mesh_resmut.mesh.get_position_of_vertex(vertex_id) + mesh_resmut.mesh.get_normal_of_vertex(vertex_id) * 0.05,
                             ),
-                            Color::BLACK,
+                            configuration.color_foreground2.into(),
                         );
         }
         

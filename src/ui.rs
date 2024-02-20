@@ -132,6 +132,7 @@ fn ui_algorithm_info(
 
     ui.add(egui::Slider::new(&mut configuration.algorithm_iterations, 1..=50).text("iterations"));
     ui.add(egui::Slider::new(&mut configuration.algorithm_samples, 1..=2000).text("samples"));
+    ui.add(egui::Slider::new(&mut configuration.gamma, 1.0..=20.0).text("gamma"));
 
     ui.add(
         egui::Slider::new(&mut configuration.percent_singularities, 1..=100).text("%singularities"),
