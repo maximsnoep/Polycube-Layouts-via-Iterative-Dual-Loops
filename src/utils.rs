@@ -1,6 +1,6 @@
 use crate::{
     doconeli::Doconeli,
-    solution::{PrincipalDirection, Surface},
+    solution::{compute_average_normal, compute_deviation, PrincipalDirection, Surface},
     ColorType, Configuration,
 };
 use bevy::{
@@ -10,7 +10,9 @@ use bevy::{
 };
 use itertools::Itertools;
 use rand::Rng;
-use std::{f32::consts::PI, ops::Add};
+use std::error::Error;
+use std::io::Write;
+use std::{f32::consts::PI, ops::Add, path::PathBuf};
 
 pub fn average<'a, T>(list: impl Iterator<Item = T>) -> T
 where
@@ -86,9 +88,61 @@ pub fn get_random_color() -> Color {
     Color::hsl(hue, sat, lit)
 }
 
+// Parula colormap
+// 53, 42, 134
+pub const PARULA_1: Color = Color::rgb(35. / 255., 42. / 255., 134. / 255.);
+// 53, 60, 172
+pub const PARULA_2: Color = Color::rgb(53. / 255., 60. / 255., 172. / 255.);
+// 31, 82, 211
+pub const PARULA_3: Color = Color::rgb(31. / 255., 82. / 255., 211. / 255.);
+// 4, 108, 224
+pub const PARULA_4: Color = Color::rgb(4. / 255., 108. / 255., 224. / 255.);
+// 16, 120, 218
+pub const PARULA_5: Color = Color::rgb(16. / 255., 120. / 255., 218. / 255.);
+// 20, 132, 211
+pub const PARULA_6: Color = Color::rgb(20. / 255., 132. / 255., 211. / 255.);
+// 8, 152, 209
+pub const PARULA_7: Color = Color::rgb(8. / 255., 152. / 255., 209. / 255.);
+// 37, 180, 169
+pub const PARULA_8: Color = Color::rgb(37. / 255., 180. / 255., 169. / 255.);
+// 9, 171, 189
+pub const PARULA_9: Color = Color::rgb(9. / 255., 171. / 255., 189. / 255.);
+// 37, 180, 169
+pub const PARULA_10: Color = Color::rgb(37. / 255., 180. / 255., 169. / 255.);
+// 65, 186, 151
+pub const PARULA_11: Color = Color::rgb(65. / 255., 186. / 255., 151. / 255.);
+// 112, 190, 128
+pub const PARULA_12: Color = Color::rgb(112. / 255., 190. / 255., 128. / 255.);
+// 145, 190, 114
+pub const PARULA_13: Color = Color::rgb(145. / 255., 190. / 255., 114. / 255.);
+// 174, 189, 103
+pub const PARULA_14: Color = Color::rgb(174. / 255., 189. / 255., 103. / 255.);
+// 208, 186, 89
+pub const PARULA_15: Color = Color::rgb(208. / 255., 186. / 255., 89. / 255.);
+// 233, 185, 78
+pub const PARULA_16: Color = Color::rgb(233. / 255., 185. / 255., 78. / 255.);
+// 253, 190, 61
+pub const PARULA_17: Color = Color::rgb(253. / 255., 190. / 255., 61. / 255.);
+// 249, 210, 41
+pub const PARULA_18: Color = Color::rgb(249. / 255., 210. / 255., 41. / 255.);
+// 244, 228, 28
+pub const PARULA_19: Color = Color::rgb(244. / 255., 228. / 255., 28. / 255.);
+
+pub const PARULA: [Color; 19] = [
+    PARULA_1, PARULA_2, PARULA_3, PARULA_4, PARULA_5, PARULA_6, PARULA_7, PARULA_8, PARULA_9,
+    PARULA_10, PARULA_11, PARULA_12, PARULA_13, PARULA_14, PARULA_15, PARULA_16, PARULA_17,
+    PARULA_18, PARULA_19,
+];
+
+pub fn color_map(value: f32, colors: Vec<Color>) -> Color {
+    let index = (value * (colors.len() - 1) as f32).round() as usize;
+    colors[index]
+}
+
 // Construct a mesh object that can be rendered using the Bevy framework.
 pub fn get_bevy_mesh_of_regions(
     regions: &Vec<Surface>,
+    granulated_mesh: &Doconeli,
     color_type: ColorType,
     configuration: &Configuration,
 ) -> Mesh {
@@ -105,16 +159,84 @@ pub fn get_bevy_mesh_of_regions(
             ColorType::DirectionSecondary => surface.color.unwrap().into(),
             ColorType::Random => get_random_color(),
             ColorType::Static(color) => color,
-            _ => surface.color.unwrap().into(),
+            _ => Color::PINK,
         };
+
+        let mut areas = vec![];
+        let mut alignment_devs = vec![];
+        let mut flatness_devs = vec![];
+
+        if color_type == ColorType::DistortionAlignment {
+            // direction is negative or positive based on angle with average normal
+            let avg_normal = compute_average_normal(&surface, &granulated_mesh);
+            let positive = surface
+                .direction
+                .unwrap()
+                .to_vector()
+                .dot(avg_normal)
+                .signum();
+            let direction = surface.direction.unwrap().to_vector() * positive;
+
+            for subface in &surface.faces {
+                let alignment_dev = compute_deviation(subface.face_id, &granulated_mesh, direction);
+                alignment_devs.push(alignment_dev);
+
+                let area = granulated_mesh.get_area_of_face(subface.face_id);
+                areas.push(area);
+            }
+
+            let max_alignment_dev = alignment_devs
+                .iter()
+                .cloned()
+                .fold(f32::NEG_INFINITY, f32::max);
+            let min_alignment_dev = alignment_devs.iter().cloned().fold(f32::INFINITY, f32::min);
+            let avg_alignment_dev =
+                alignment_devs.iter().sum::<f32>() / alignment_devs.len() as f32;
+            let avg_alignment_dev_scaled = alignment_devs
+                .iter()
+                .zip(areas.iter())
+                .map(|(dev, area)| dev * area)
+                .sum::<f32>()
+                / areas.iter().sum::<f32>();
+        }
+
+        if color_type == ColorType::DistortionFlatness {
+            // compute avg normal of the surface
+            let avg_normal = compute_average_normal(&surface, &granulated_mesh);
+            for subface in &surface.faces {
+                let flatness_dev = compute_deviation(subface.face_id, &granulated_mesh, avg_normal);
+                flatness_devs.push(flatness_dev);
+
+                let area = granulated_mesh.get_area_of_face(subface.face_id);
+                areas.push(area);
+            }
+
+            let max_flatness_dev = flatness_devs
+                .iter()
+                .cloned()
+                .fold(f32::NEG_INFINITY, f32::max);
+            let min_flatness_dev = flatness_devs.iter().cloned().fold(f32::INFINITY, f32::min);
+            let avg_flatness_dev = flatness_devs.iter().sum::<f32>() / flatness_devs.len() as f32;
+            let avg_flatness_dev_scaled = flatness_devs
+                .iter()
+                .zip(areas.iter())
+                .map(|(dev, area)| dev * area)
+                .sum::<f32>()
+                / areas.iter().sum::<f32>();
+        }
 
         let mut color_f32 = color.as_rgba_f32();
 
-        for subface in &surface.faces {
-            if color_type == ColorType::Distortion {
-                println!("{}", subface.distortion.unwrap());
-                color_f32 = Color::hsl(0., 0.5, 1. - 0.5 * (subface.distortion.unwrap() / 90.))
-                    .as_rgba_f32();
+        for (i, subface) in surface.faces.iter().enumerate() {
+            if color_type == ColorType::DistortionAlignment {
+                let alignment_dev = alignment_devs[i];
+
+                color_f32 = color_map(alignment_dev, PARULA.to_vec()).as_rgba_f32();
+            }
+            if color_type == ColorType::DistortionFlatness {
+                let flatness_dev = flatness_devs[i];
+
+                color_f32 = color_map(flatness_dev, PARULA.to_vec()).as_rgba_f32();
             }
 
             for &p1 in &subface.bounding_points {
@@ -142,6 +264,62 @@ pub fn get_bevy_mesh_of_regions(
     mesh_triangle_list.set_indices(Some(Indices::U32((0..length as u32).collect())));
 
     mesh_triangle_list
+}
+
+pub fn get_labeling_of_mesh(
+    path: &PathBuf,
+    granulated_mesh: &Doconeli,
+    regions: &Vec<Surface>,
+) -> Result<(), Box<dyn Error>> {
+    let mut labels = vec![-1; granulated_mesh.faces.len()];
+
+    for surface in regions {
+        // get avg normal of surface
+        let avg_normal = average(
+            surface
+                .faces
+                .iter()
+                .map(|subface| granulated_mesh.faces[subface.face_id].normal),
+        );
+        // positive or negative based on angle with the direction
+        let positive = surface.direction.unwrap().to_vector().dot(avg_normal) > 0.;
+        // set label for all faces in the surface
+        let label = match surface.direction.unwrap() {
+            PrincipalDirection::X => {
+                if positive {
+                    0
+                } else {
+                    1
+                }
+            }
+            PrincipalDirection::Y => {
+                if positive {
+                    2
+                } else {
+                    3
+                }
+            }
+            PrincipalDirection::Z => {
+                if positive {
+                    4
+                } else {
+                    5
+                }
+            }
+        };
+
+        for subface in surface.faces.iter() {
+            labels[subface.face_id] = label;
+        }
+    }
+
+    let mut file = std::fs::File::create(path)?;
+
+    for label in labels {
+        writeln!(file, "{label:?}");
+    }
+
+    Ok(())
 }
 
 // Construct a mesh object that can be rendered using the Bevy framework.
@@ -212,7 +390,7 @@ pub fn get_bevy_mesh_of_graph(
             ColorType::Random => get_random_color(),
             ColorType::DirectionPrimary => get_color(dir.unwrap(), true, configuration),
             ColorType::DirectionSecondary => get_color(dir.unwrap(), false, configuration),
-            ColorType::Distortion => todo!(),
+            _ => todo!(),
         };
 
         for &vertex1 in &vertices {

@@ -393,6 +393,17 @@ impl Doconeli {
         self.get_distance_between_vertices(v_a, v_b)
     }
 
+    // Note that a face is a triangle (we use Heron's formula)
+    pub fn get_area_of_face(&self, face_id: usize) -> f32 {
+        let edges = self.get_edges_of_face(face_id);
+        let a = self.get_length_of_edge(edges[0]);
+        let b = self.get_length_of_edge(edges[1]);
+        let c = self.get_length_of_edge(edges[2]);
+
+        let s = (a + b + c) / 2.;
+        (s * (s - a) * (s - b) * (s - c)).sqrt()
+    }
+
     pub fn get_vector_of_edge(&self, edge_id: usize) -> Vec3 {
         self.get_position_of_vertex(self.get_root_of_edge(self.get_next_of_edge(edge_id)))
             - self.get_position_of_vertex(self.get_root_of_edge(edge_id))
@@ -924,11 +935,22 @@ impl Doconeli {
         }
 
         for face_id in 0..self.faces.len() {
+            writeln!(
+                file,
+                "vn {x:.6} {y:.6} {z:.6}",
+                x = self.faces[face_id].normal.x,
+                y = self.faces[face_id].normal.y,
+                z = self.faces[face_id].normal.z
+            )?;
+        }
+
+        for face_id in 0..self.faces.len() {
             let vertices = self.get_vertices_of_face(face_id);
             write!(file, "f")?;
             for vertex_id in vertices {
                 write!(file, " {}", vertex_id + 1)?;
             }
+            write!(file, "\n")?;
         }
 
         Ok(())

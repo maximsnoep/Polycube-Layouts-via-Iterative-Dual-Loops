@@ -156,7 +156,7 @@ impl Primalization {
                         position: self.original_mesh.get_position_of_vertex(singularity),
                         normal: self.original_mesh.get_normal_of_vertex(singularity),
                         region_id,
-                        weight: 50,
+                        weight: 1000,
                     });
                 }
             }
@@ -360,6 +360,73 @@ impl Primalization {
                         self.face_to_splitted[root_face].push(f_1);
                         self.face_to_splitted[root_face].push(f_2);
 
+                        let edges_0 = self.granulated_mesh.get_edges_of_face(f_0);
+                        // get the edge that does not have the vertex v0
+                        let edge_0_id = edges_0
+                            .iter()
+                            .find(|&edge_id| {
+                                let (u, v) = self.granulated_mesh.get_endpoints_of_edge(*edge_id);
+                                u != v0 && v != v0
+                            })
+                            .unwrap()
+                            .to_owned();
+
+                        let edges_1 = self.granulated_mesh.get_edges_of_face(f_1);
+                        let edge_1_id = edges_1
+                            .iter()
+                            .find(|&edge_id| {
+                                let (u, v) = self.granulated_mesh.get_endpoints_of_edge(*edge_id);
+                                u != v0 && v != v0
+                            })
+                            .unwrap()
+                            .to_owned();
+
+                        let edges_2 = self.granulated_mesh.get_edges_of_face(f_2);
+                        let edge_2_id = edges_2
+                            .iter()
+                            .find(|&edge_id| {
+                                let (u, v) = self.granulated_mesh.get_endpoints_of_edge(*edge_id);
+                                u != v0 && v != v0
+                            })
+                            .unwrap()
+                            .to_owned();
+
+                        // split on edge_0
+                        let (v1, (f_3, f_4, f_5, f_6)) =
+                            self.granulated_mesh.split_edge(edge_0_id, None);
+                        // split on edge_1
+                        let (v2, (f_7, f_8, f_9, f_10)) =
+                            self.granulated_mesh.split_edge(edge_1_id, None);
+                        // split on edge_2
+                        let (v3, (f_11, f_12, f_13, f_14)) =
+                            self.granulated_mesh.split_edge(edge_2_id, None);
+
+                        let root_face = self.splitface_to_originalface[&face_id];
+                        self.splitface_to_originalface.insert(f_3, root_face);
+                        self.splitface_to_originalface.insert(f_4, root_face);
+                        self.splitface_to_originalface.insert(f_5, root_face);
+                        self.splitface_to_originalface.insert(f_6, root_face);
+                        self.splitface_to_originalface.insert(f_7, root_face);
+                        self.splitface_to_originalface.insert(f_8, root_face);
+                        self.splitface_to_originalface.insert(f_9, root_face);
+                        self.splitface_to_originalface.insert(f_10, root_face);
+                        self.splitface_to_originalface.insert(f_11, root_face);
+                        self.splitface_to_originalface.insert(f_12, root_face);
+                        self.splitface_to_originalface.insert(f_13, root_face);
+                        self.splitface_to_originalface.insert(f_14, root_face);
+                        self.face_to_splitted[root_face].push(f_3);
+                        self.face_to_splitted[root_face].push(f_4);
+                        self.face_to_splitted[root_face].push(f_5);
+                        self.face_to_splitted[root_face].push(f_6);
+                        self.face_to_splitted[root_face].push(f_7);
+                        self.face_to_splitted[root_face].push(f_8);
+                        self.face_to_splitted[root_face].push(f_9);
+                        self.face_to_splitted[root_face].push(f_10);
+                        self.face_to_splitted[root_face].push(f_11);
+                        self.face_to_splitted[root_face].push(f_12);
+                        self.face_to_splitted[root_face].push(f_13);
+                        self.face_to_splitted[root_face].push(f_14);
+
                         self.region_to_primal[region_id] = Some(PrimalVertex {
                             vertex_type: PrimalVertexType::Vertex(v0),
                             position: self.granulated_mesh.get_position_of_vertex(v0),
@@ -377,57 +444,57 @@ impl Primalization {
             }
         }
 
-        // granulate the faces further
-        for _ in 0..2 {
-            for &splitted_face in face_to_regions.keys() {
-                for face_id in self.face_to_splitted[splitted_face].clone() {
-                    let chosen_edge = self
-                        .granulated_mesh
-                        .get_edges_of_face(face_id)
-                        .iter()
-                        .map(|&edge_id| (edge_id, self.granulated_mesh.get_length_of_edge(edge_id)))
-                        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-                        .unwrap()
-                        .0;
+        // // granulate the faces further
+        // for _ in 0..2 {
+        //     for &splitted_face in face_to_regions.keys() {
+        //         for face_id in self.face_to_splitted[splitted_face].clone() {
+        //             let chosen_edge = self
+        //                 .granulated_mesh
+        //                 .get_edges_of_face(face_id)
+        //                 .iter()
+        //                 .map(|&edge_id| (edge_id, self.granulated_mesh.get_length_of_edge(edge_id)))
+        //                 .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        //                 .unwrap()
+        //                 .0;
 
-                    let (this_face, or_that_face) =
-                        self.granulated_mesh.get_faces_of_edge(chosen_edge);
+        //             let (this_face, or_that_face) =
+        //                 self.granulated_mesh.get_faces_of_edge(chosen_edge);
 
-                    if self.splitface_to_originalface[&this_face]
-                        != self.splitface_to_originalface[&or_that_face]
-                    {
-                        continue;
-                    }
+        //             if self.splitface_to_originalface[&this_face]
+        //                 != self.splitface_to_originalface[&or_that_face]
+        //             {
+        //                 continue;
+        //             }
 
-                    let (_, (f_0, f_1, f_2, f_3)) =
-                        self.granulated_mesh.split_edge(chosen_edge, None);
+        //             let (_, (f_0, f_1, f_2, f_3)) =
+        //                 self.granulated_mesh.split_edge(chosen_edge, None);
 
-                    let root_face = self.splitface_to_originalface[&face_id];
-                    self.splitface_to_originalface.insert(f_0, root_face);
-                    self.splitface_to_originalface.insert(f_1, root_face);
-                    self.splitface_to_originalface.insert(f_2, root_face);
-                    self.splitface_to_originalface.insert(f_3, root_face);
+        //             let root_face = self.splitface_to_originalface[&face_id];
+        //             self.splitface_to_originalface.insert(f_0, root_face);
+        //             self.splitface_to_originalface.insert(f_1, root_face);
+        //             self.splitface_to_originalface.insert(f_2, root_face);
+        //             self.splitface_to_originalface.insert(f_3, root_face);
 
-                    self.face_to_splitted[root_face].push(f_0);
-                    self.face_to_splitted[root_face].push(f_1);
-                    self.face_to_splitted[root_face].push(f_2);
-                    self.face_to_splitted[root_face].push(f_3);
-                }
+        //             self.face_to_splitted[root_face].push(f_0);
+        //             self.face_to_splitted[root_face].push(f_1);
+        //             self.face_to_splitted[root_face].push(f_2);
+        //             self.face_to_splitted[root_face].push(f_3);
+        //         }
 
-                for face_id in self.face_to_splitted[splitted_face].clone() {
-                    let (_, (f_0, f_1, f_2)) = self.granulated_mesh.split_face(face_id, None);
+        //         for face_id in self.face_to_splitted[splitted_face].clone() {
+        //             let (_, (f_0, f_1, f_2)) = self.granulated_mesh.split_face(face_id, None);
 
-                    let root_face = self.splitface_to_originalface[&face_id];
-                    self.splitface_to_originalface.insert(f_0, root_face);
-                    self.splitface_to_originalface.insert(f_1, root_face);
-                    self.splitface_to_originalface.insert(f_2, root_face);
+        //             let root_face = self.splitface_to_originalface[&face_id];
+        //             self.splitface_to_originalface.insert(f_0, root_face);
+        //             self.splitface_to_originalface.insert(f_1, root_face);
+        //             self.splitface_to_originalface.insert(f_2, root_face);
 
-                    self.face_to_splitted[root_face].push(f_0);
-                    self.face_to_splitted[root_face].push(f_1);
-                    self.face_to_splitted[root_face].push(f_2);
-                }
-            }
-        }
+        //             self.face_to_splitted[root_face].push(f_0);
+        //             self.face_to_splitted[root_face].push(f_1);
+        //             self.face_to_splitted[root_face].push(f_2);
+        //         }
+        //     }
+        // }
 
         self.polycube_graph = MeshResource::polycubify(&self.patch_graph);
     }
@@ -702,6 +769,8 @@ impl Primalization {
             edge_to_faces[edge_id] = faces;
         }
 
+        // find patches
+
         for patch_id in 0..self.patch_graph.faces.len() {
             let boundary_edges = self.patch_graph.get_edges_of_face(patch_id);
 
@@ -797,9 +866,111 @@ impl Primalization {
                 degree: 0,
             };
 
+            println!("patch_id {patch_id}");
+
+            // compute avg normal of the surface
+            let avg_normal = compute_average_normal(&surface, &self.granulated_mesh);
+
+            // direction is negative or positive based on angle with average normal
+            let positive = dir.unwrap().to_vector().dot(avg_normal).signum();
+            let direction = dir.unwrap().to_vector() * positive;
+
+            let mut areas = vec![];
+            let mut flatness_devs = vec![];
+            let mut alignment_devs = vec![];
+            for subface in &surface.faces {
+                let flatness_dev =
+                    compute_deviation(subface.face_id, &self.granulated_mesh, avg_normal);
+                flatness_devs.push(flatness_dev);
+
+                let alignment_dev =
+                    compute_deviation(subface.face_id, &self.granulated_mesh, direction);
+                alignment_devs.push(alignment_dev);
+
+                let area = self.granulated_mesh.get_area_of_face(subface.face_id);
+                areas.push(area);
+            }
+
+            let max_flatness_dev = flatness_devs
+                .iter()
+                .cloned()
+                .fold(f32::NEG_INFINITY, f32::max);
+            let min_flatness_dev = flatness_devs.iter().cloned().fold(f32::INFINITY, f32::min);
+            let avg_flatness_dev = flatness_devs.iter().sum::<f32>() / flatness_devs.len() as f32;
+            let avg_flatness_dev_scaled = flatness_devs
+                .iter()
+                .zip(areas.iter())
+                .map(|(dev, area)| dev * area)
+                .sum::<f32>()
+                / areas.iter().sum::<f32>();
+
+            println!("FLATNESS: max_dev {max_flatness_dev}, min_dev {min_flatness_dev}, avg_dev {avg_flatness_dev}, avg_dev_scaled {avg_flatness_dev_scaled}");
+
+            let max_alignment_dev = alignment_devs
+                .iter()
+                .cloned()
+                .fold(f32::NEG_INFINITY, f32::max);
+            let min_alignment_dev = alignment_devs.iter().cloned().fold(f32::INFINITY, f32::min);
+            let avg_alignment_dev =
+                alignment_devs.iter().sum::<f32>() / alignment_devs.len() as f32;
+            let avg_alignment_dev_scaled = alignment_devs
+                .iter()
+                .zip(areas.iter())
+                .map(|(dev, area)| dev * area)
+                .sum::<f32>()
+                / areas.iter().sum::<f32>();
+
+            println!("ALIGNMENT: max_dev {max_alignment_dev}, min_dev {min_alignment_dev}, avg_dev {avg_alignment_dev}, avg_dev_scaled {avg_alignment_dev_scaled}");
+
+            println!("---\n\n");
+
             self.patch_to_surface[patch_id] = Some(surface);
         }
     }
+}
+
+// Given a surface, compute the average normal of the surface (weighted by the area of the faces)
+pub fn compute_average_normal(surface: &Surface, mesh: &Doconeli) -> Vec3 {
+    let mut normal = Vec3::splat(0.);
+    let mut total_area = 0.;
+
+    for subface in &surface.faces {
+        let area = mesh.get_area_of_face(subface.face_id);
+        total_area += area;
+        normal += mesh.get_normal_of_face(subface.face_id) * area;
+    }
+
+    println!("total area {}", total_area);
+    println!("normal (scaled) {}", normal / total_area);
+    println!("normal (normalized1) {}", normal.normalize());
+    println!("normal (normalized2) {}", (normal / total_area).normalize());
+
+    normal / total_area
+}
+
+pub fn compute_deviation(face_id: usize, mesh: &Doconeli, vector: Vec3) -> f32 {
+    mesh.get_normal_of_face(face_id).angle_between(vector) / std::f32::consts::PI
+}
+
+// Given a surface, and a vector, compute the average deviation of the normals of the faces to the vector
+pub fn compute_average_deviation(surface: &Surface, mesh: &Doconeli, vector: Vec3) -> f32 {
+    let mut deviation = 0.;
+    let mut total_area = 0.;
+
+    for subface in &surface.faces {
+        let area = mesh.get_area_of_face(subface.face_id);
+        total_area += area;
+        deviation += compute_deviation(subface.face_id, mesh, vector) * area;
+    }
+
+    println!("total area {}", total_area);
+    println!("deviation {}", deviation);
+    println!(
+        "deviation / total area {}",
+        (deviation / total_area) / std::f32::consts::PI
+    );
+
+    deviation / total_area
 }
 
 // A solution is a collection of paths.

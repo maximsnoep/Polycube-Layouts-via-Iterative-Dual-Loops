@@ -111,6 +111,9 @@ fn ui_file_info(
         if ui.button("layout").clicked() {
             ev_writer.send(ActionEvent::ExportLayout);
         };
+        if ui.button("labeling").clicked() {
+            ev_writer.send(ActionEvent::ExportLabeling);
+        };
         if ui.button("state").clicked() {
             ev_writer.send(ActionEvent::ExportState);
         };
@@ -277,49 +280,49 @@ fn ui_rendering_info(
     ui.label("Debug");
     ui.checkbox(&mut configuration.draw_debug_lines, "Debug lines");
 
-    ui.add_space(10.);
-    ui.label("Colors");
-    ui.horizontal(|ui| {
-        ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_background);
-        ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_foreground);
-        ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_foreground2);
-        ui.label("Main");
-    });
+    // ui.add_space(10.);
+    // ui.label("Colors");
+    // ui.horizontal(|ui| {
+    //     ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_background);
+    //     ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_foreground);
+    //     ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_foreground2);
+    //     ui.label("Main");
+    // });
 
-    ui.horizontal(|ui| {
-        ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_primary1);
-        ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_primary2);
-        ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_primary3);
-        ui.label("Primary");
-    });
+    // ui.horizontal(|ui| {
+    //     ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_primary1);
+    //     ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_primary2);
+    //     ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_primary3);
+    //     ui.label("Primary");
+    // });
 
-    ui.horizontal(|ui| {
-        ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_secondary1);
-        ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_secondary2);
-        ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_secondary3);
-        ui.label("Secondary");
-    });
+    // ui.horizontal(|ui| {
+    //     ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_secondary1);
+    //     ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_secondary2);
+    //     ui.color_edit_button_rgba_unmultiplied(&mut configuration.color_secondary3);
+    //     ui.label("Secondary");
+    // });
 
-    ui.add_space(5.);
+    // ui.add_space(5.);
 
-    ui.horizontal(|ui| {
-        if ui.button("apply colors").clicked() {
-            mesh_resmut.as_mut();
-        };
-        if ui.button("reset colors").clicked() {
-            ev_writer.send(ActionEvent::ResetConfiguration);
-        };
-    });
+    // ui.horizontal(|ui| {
+    //     if ui.button("apply colors").clicked() {
+    //         mesh_resmut.as_mut();
+    //     };
+    //     if ui.button("reset colors").clicked() {
+    //         ev_writer.send(ActionEvent::ResetConfiguration);
+    //     };
+    // });
 
-    ui.add_space(10.);
-    ui.label("Camera controls");
+    // ui.add_space(10.);
+    // ui.label("Camera controls");
 
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut configuration.camera_autorotate, "auto-rotate");
-        ui.add(egui::Slider::new(&mut configuration.camera_speed, 1..=100).text("speed"));
-    });
+    // ui.horizontal(|ui| {
+    //     ui.checkbox(&mut configuration.camera_autorotate, "auto-rotate");
+    //     ui.add(egui::Slider::new(&mut configuration.camera_speed, 1..=100).text("speed"));
+    // });
 
-    ui.add_space(10.);
+    // ui.add_space(10.);
 
-    ui.add_space(5.);
+    // ui.add_space(5.);
 }

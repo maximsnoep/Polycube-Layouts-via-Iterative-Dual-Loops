@@ -8,13 +8,12 @@ mod duaprima;
 
 use crate::solution::Primalization;
 use crate::ui::ui;
-use crate::utils::{get_bevy_mesh_of_mesh, get_bevy_mesh_of_regions, get_bevy_mesh_of_graph};
+use crate::utils::{get_bevy_mesh_of_graph, get_bevy_mesh_of_mesh, get_bevy_mesh_of_regions, get_labeling_of_mesh};
 use bevy::prelude::*;
 use bevy::window::WindowMode;
 use bevy::{diagnostic::LogDiagnosticsPlugin, time::common_conditions::on_timer};
 use bevy_egui::EguiPlugin;
 use doconeli::Doconeli;
-use graph::Graph;
 use itertools::Itertools;
 use rand::Rng;
 use smooth_bevy_cameras::{
@@ -55,6 +54,7 @@ pub enum ActionEvent {
 
     ExportMesh,
     ExportLayout,
+    ExportLabeling,
     ExportState,
 
     ResetConfiguration,
@@ -133,6 +133,8 @@ pub enum RenderType {
     PatchesMesh,
     PatchesInnerMesh,
     Polycube,
+    DistortionFlatness,
+    DistortionAlignment,
     Nothing,
 }
 
@@ -142,7 +144,8 @@ pub enum ColorType {
     Random,
     DirectionPrimary,
     DirectionSecondary,
-    Distortion,
+    DistortionAlignment,
+    DistortionFlatness
 }
 impl Default for ColorType {
     fn default() -> Self {
@@ -452,6 +455,26 @@ pub fn handle_events(
                 
                 mesh_resmut.primalization.patch_graph.write_to_obj(&PathBuf::from(path));
             }
+            ActionEvent::ExportLabeling => {
+                let path = format!(
+                    "./out/labeling_{}_{:?}.flag",
+                    configuration
+                        .source
+                        .split("\\")
+                        .last()
+                        .unwrap()
+                        .split(".")
+                        .next()
+                        .unwrap(),
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .expect("Time went backwards")
+                            .as_millis());
+
+                get_labeling_of_mesh(&PathBuf::from(path), &mesh_resmut.primalization.granulated_mesh, &mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec());
+
+                // mesh_resmut.primalization.patch_graph.write_to_obj(&PathBuf::from(path));
+            }
             ActionEvent::ExportState => {
                 let path = format!(
                     "./out/state_{}_{:?}.poc",
@@ -689,10 +712,16 @@ fn update_mesh(
         },
         RenderType::PatchesInnerMesh => {
             if configuration.black {
-                get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), ColorType::Static(Color::BLACK), &configuration)
+                get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.granulated_mesh, ColorType::Static(Color::BLACK), &configuration)
             } else {
-                get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), ColorType::DirectionPrimary, &configuration)
+                get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.granulated_mesh,ColorType::DirectionPrimary, &configuration)
             }
+        },
+        RenderType::DistortionAlignment => {
+            get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.granulated_mesh,ColorType::DistortionAlignment, &configuration)
+        },
+        RenderType::DistortionFlatness => {
+            get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.granulated_mesh, ColorType::DistortionFlatness, &configuration)
         },
         RenderType::Polycube => {
             if configuration.black {
@@ -701,6 +730,8 @@ fn update_mesh(
                 get_bevy_mesh_of_graph(&mesh_resmut.primalization.polycube_graph, ColorType::DirectionPrimary, &configuration)  
             }  
         },
+        
+
         RenderType::Nothing => return,
         _ => get_bevy_mesh_of_mesh(&mesh_resmut.mesh, ColorType::Static(configuration.color_foreground.into()), &configuration),
     };
