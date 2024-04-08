@@ -31,6 +31,7 @@ pub struct MeshResource {
 
     pub sol: Solution,
     pub primalization: Primalization,
+    pub primalization2: Primalization,
 
     pub graphs: [Mipoga; 3],
 }

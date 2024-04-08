@@ -229,6 +229,16 @@ fn ui_algorithm_info(
         };
     });
 
+    ui.horizontal(|ui| {
+        ui.label("Primalization embedding (NEW)");
+        if ui.button("init").clicked() {
+            ev_writer.send(ActionEvent::InitPrimalize);
+        };
+        if ui.button("step").clicked() {
+            ev_writer.send(ActionEvent::StepPrimalize);
+        };
+    });
+
     ui.add_space(10.);
 }
 

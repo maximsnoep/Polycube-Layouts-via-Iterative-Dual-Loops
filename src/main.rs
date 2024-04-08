@@ -6,7 +6,8 @@ mod ui;
 mod utils;
 mod duaprima;
 
-use crate::solution::Primalization;
+use crate::duaprima::Duaprima;
+use crate::solution::{PrimalVertexType, Primalization, Subface, Surface};
 use crate::ui::ui;
 use crate::utils::{get_bevy_mesh_of_graph, get_bevy_mesh_of_mesh, get_bevy_mesh_of_regions, get_labeling_of_mesh};
 use bevy::prelude::*;
@@ -49,6 +50,9 @@ pub enum ActionEvent {
 
     PrimalizePlaceCenters,
     PrimalizeConnectCenters,
+
+    InitPrimalize,
+    StepPrimalize,
 
     InitializeLoops,
 
@@ -600,7 +604,191 @@ pub fn handle_events(
                 configuration.draw_paths = false;
 
             },
+            ActionEvent::InitPrimalize => {
+                // For each crossing, color its face
 
+                mesh_resmut.primalization2 = Primalization::default();
+
+                for intersection_id in 0..mesh_resmut.sol.intersection_graph.vertices.len() {
+                    let face = mesh_resmut.sol.intersection_graph.vertices[intersection_id].original_face_id;
+                    let paths = mesh_resmut.sol.intersection_graph.vertices[intersection_id].ordering.iter().map(|x| x.0).collect_vec();
+                    let directions = paths.iter().map(|x| mesh_resmut.sol.paths[*x].direction).collect_vec();
+                    // get the direction that is not in directions
+                    let direction = [PrincipalDirection::X, PrincipalDirection::Y, PrincipalDirection::Z].iter().filter(|x| !directions.contains(x)).next().unwrap();
+
+                    let subface = Subface {
+                        face_id: face,
+                        bounding_points: mesh_resmut.mesh.get_vertices_of_face(face).iter().map(|&x| (mesh_resmut.mesh.get_position_of_vertex(x), mesh_resmut.mesh.get_normal_of_face(face))).collect_vec(),
+                        distortion: None,
+                    };
+
+                    let surface = Surface {
+                        faces: vec![subface],
+                        inner_vertices: HashSet::new(),
+                        direction: Some(direction.to_owned()),
+                        color: None,
+                        degree: 0,
+                    };
+
+                    mesh_resmut.primalization2.patch_to_surface.push(Some(surface));
+
+
+                }
+
+
+
+            },
+            ActionEvent::StepPrimalize => {
+
+                // for each loop edge segment, we find a split such that the two surfaces are balanced (with respect to normal direction of the faces inbetween)
+                let mut splits = vec![None; mesh_resmut.sol.intersection_graph.edges.len()];
+                
+                for edge_id in 0..mesh_resmut.sol.intersection_graph.edges.len() {
+
+                    let (endpoint_1, endpoint_2) = mesh_resmut.sol.intersection_graph.get_endpoints_of_edge(edge_id);
+
+                    // data of endpoint_1
+                    let face_1 = mesh_resmut.sol.intersection_graph.vertices[endpoint_1].original_face_id;
+                    let paths_1 = mesh_resmut.sol.intersection_graph.vertices[endpoint_1].ordering.iter().map(|x| x.0).collect_vec();
+                    let directions_1 = paths_1.iter().map(|x| mesh_resmut.sol.paths[*x].direction).collect_vec();
+                    // get the direction that is not in directions
+                    let direction_1 = [PrincipalDirection::X, PrincipalDirection::Y, PrincipalDirection::Z].iter().filter(|x| !directions_1.contains(x)).next().unwrap();
+                    // normal of face_1
+                    let normal_1 = mesh_resmut.mesh.get_normal_of_face(face_1);
+                    // actual direction (based on smaller angle with normal of face_1)
+                    let signed_direction_1 = [direction_1.to_vector(), -direction_1.to_vector()].iter().map(|x| (x, normal_1.angle_between(*x))).collect_vec().iter().min_by(|x, y| x.1.partial_cmp(&y.1).unwrap()).unwrap().0.to_owned();
+
+                    // get the surface of endpoint_1
+                    let surface_1 = mesh_resmut.primalization2.patch_to_surface.iter().enumerate().find(|x| x.1.as_ref().unwrap().faces.iter().map(|x| x.face_id).collect_vec().contains(&face_1)).unwrap().0;
+
+                    // data of endpoint_2
+                    let face_2 = mesh_resmut.sol.intersection_graph.vertices[endpoint_2].original_face_id;
+                    let paths_2 = mesh_resmut.sol.intersection_graph.vertices[endpoint_2].ordering.iter().map(|x| x.0).collect_vec();
+                    let directions_2 = paths_2.iter().map(|x| mesh_resmut.sol.paths[*x].direction).collect_vec();
+                    // get the direction that is not in directions
+                    let direction_2 = [PrincipalDirection::X, PrincipalDirection::Y, PrincipalDirection::Z].iter().filter(|x| !directions_2.contains(x)).next().unwrap();
+                    // normal of face_2
+                    let normal_2 = mesh_resmut.mesh.get_normal_of_face(face_2);
+                    // actual direction (based on smaller angle with normal of face_2)
+                    let signed_direction_2 = [direction_2.to_vector(), -direction_2.to_vector()].iter().map(|x| (x, normal_2.angle_between(*x))).collect_vec().iter().min_by(|x, y| x.1.partial_cmp(&y.1).unwrap()).unwrap().0.to_owned();
+                    
+                    // get the surface of endpoint_2
+                    let surface_2 = mesh_resmut.primalization2.patch_to_surface.iter().enumerate().find(|x| x.1.as_ref().unwrap().faces.iter().map(|x| x.face_id).collect_vec().contains(&face_2)).unwrap().0;
+
+                    // get all faces inbetween (in order)
+                    let mut faces_between = vec![];
+                    mesh_resmut.sol.intersection_graph.edges[edge_id].edges_between.as_ref().unwrap().iter().for_each(|&x| {
+                        let (a, b) = mesh_resmut.mesh.get_faces_of_edge(x);
+                        if !faces_between.contains(&a) && a != face_1 && a != face_2 {
+                            faces_between.push(a);
+                        }
+                        if !faces_between.contains(&b) && b != face_1 && b != face_2 {
+                            faces_between.push(b);
+                        }
+                    });
+
+                    // find split such that the two surfaces are balanced (with respect to normal direction of the faces inbetween)
+                    let normals_between = faces_between.iter().map(|&x| mesh_resmut.mesh.get_normal_of_face(x)).collect_vec();
+                    // true if angle between normal of face and direction of surface_1 is smaller than direction of surface_2
+                    let decision_between = normals_between.iter().map(|x| x.angle_between(signed_direction_1) < x.angle_between(signed_direction_2)).collect_vec();
+
+                    // print the normal angles
+                    println!("normals {:?}", normals_between.iter().map(|x| x.angle_between(direction_1.to_vector())).collect_vec());
+                    println!("normals {:?}", normals_between.iter().map(|x| x.angle_between(direction_2.to_vector())).collect_vec());
+                    println!("decision {:?}", decision_between);
+
+                    // split such that we minimize the number of false in the first half, and minimize the number of true in the second half
+                    let mut split = 0;
+                    let mut min_score = usize::MAX;
+                    for i in 0..faces_between.len() {
+                        let score = decision_between.iter().take(i).filter(|x| !**x).count() + decision_between.iter().skip(i).filter(|x| **x).count();
+                        if score < min_score {
+                            min_score = score;
+                            split = i;
+                        }
+                    }
+
+                    println!("split {:?} and score {:?}", split, min_score);
+
+                    splits[edge_id] = Some(split);
+
+                    // add to surface_1
+                    for &face_to_add in faces_between.iter().take(split) {
+                        let subface = Subface {
+                            face_id: face_to_add,
+                            bounding_points: mesh_resmut.mesh.get_vertices_of_face(face_to_add).iter().map(|&x| (mesh_resmut.mesh.get_position_of_vertex(x), mesh_resmut.mesh.get_normal_of_face(face_to_add))).collect_vec(),
+                            distortion: None,
+                        };
+                        mesh_resmut.primalization2.patch_to_surface[surface_1].as_mut().unwrap().faces.push(subface);
+                    }
+
+                    // add to surface_2
+                    for &face_to_add in faces_between.iter().skip(split) {
+                        let subface = Subface {
+                            face_id: face_to_add,
+                            bounding_points: mesh_resmut.mesh.get_vertices_of_face(face_to_add).iter().map(|&x| (mesh_resmut.mesh.get_position_of_vertex(x), mesh_resmut.mesh.get_normal_of_face(face_to_add))).collect_vec(),
+                            distortion: None,
+                        };
+                        mesh_resmut.primalization2.patch_to_surface[surface_2].as_mut().unwrap().faces.push(subface);
+                    }
+
+                }
+
+                // For each patch, select a center point (vertex). Then, connect that center to each of the splits in the boundary of the patch
+                // Go through all vertices, pick the vertex that is closest to the center of the patch
+                // Then, connect that vertex to the splits in the boundary of the patch
+
+                mesh_resmut.primalization = Primalization::initialize(&mesh_resmut.mesh, &mesh_resmut.sol);
+
+                let singularities = mesh_resmut.get_top_n_percent_singularities(configuration.percent_singularities);
+                mesh_resmut.primalization.place_primals(singularities, &configuration);
+
+                for region_id in 0..mesh_resmut.primalization.region_to_primal.len() {
+
+                    if let PrimalVertexType::Vertex(primal_id) = mesh_resmut.primalization.region_to_primal[region_id].as_ref().unwrap().vertex_type {
+                        // shortest path from this center (in granulated mesh) to the splits in the boundary of the patch
+                        
+                        // the vertices of the region
+                        let inner_vertices = mesh_resmut.sol.regions[region_id].inner_vertices.clone();
+                        // find all boundaries (all that share inner vertex)
+                        let mut boundaries = vec![];
+                        for loop_segment_id in 0..mesh_resmut.sol.intersection_graph.edges.len() {
+                            let edges_on_loop = mesh_resmut.sol.intersection_graph.edges[loop_segment_id].edges_between.as_ref().unwrap();
+                            if edges_on_loop.iter().any(|&x| inner_vertices.contains(&mesh_resmut.mesh.get_endpoints_of_edge(x).0) || inner_vertices.contains(&mesh_resmut.mesh.get_endpoints_of_edge(x).1)) {
+                                boundaries.push(loop_segment_id);
+                            }
+                        }
+
+                        println!("region {:?}", region_id);
+                        println!("boundaries {:?}", boundaries);
+
+                        // let mut ggg: Duaprima = Duaprima::from_mesh_with_mask(
+                        //     &mesh_resmut.primalization.granulated_mesh,
+                        //     HashSet::new(),
+                        //     HashSet::new(),
+                        // );
+                        // ggg.precompute_euclidean_weights();
+
+                        // // we are in a region, this region has a boundary of loop segments
+                        // let boundary = mesh_resmut.sol.
+                        // // we want to find the shortest path from the center to the splits in the boundary of the patch
+
+
+                        // if let Some(path) = ggg.shortest_path(center, split_endpoint_1) {
+                        //     println!("found path..");
+
+                        // }
+
+                        
+
+                    }
+                    
+
+                }
+                
+
+
+            },
         }
     }
 }
@@ -712,9 +900,9 @@ fn update_mesh(
         },
         RenderType::PatchesInnerMesh => {
             if configuration.black {
-                get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.granulated_mesh, ColorType::Static(Color::BLACK), &configuration)
+                get_bevy_mesh_of_regions(&mesh_resmut.primalization2.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization2.granulated_mesh, ColorType::Static(Color::BLACK), &configuration)
             } else {
-                get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.granulated_mesh,ColorType::DirectionPrimary, &configuration)
+                get_bevy_mesh_of_regions(&mesh_resmut.primalization2.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization2.granulated_mesh,ColorType::DirectionPrimary, &configuration)
             }
         },
         RenderType::DistortionAlignment => {
@@ -863,7 +1051,7 @@ fn draw_gizmos(
 
     }
 
-    if configuration.draw_centers {
+    if true {
 
         for primal in &mesh_resmut.primalization.region_to_primal {
             if let Some(primal) = primal {
@@ -916,7 +1104,7 @@ fn draw_gizmos(
         }
     }
 
-    if configuration.draw_centers {
+    if true {
         for edge_id in 0..mesh_resmut.primalization.patch_graph.edges.len() {
             if let Some(path) = &mesh_resmut.primalization.edge_to_paths[edge_id] {
                 let dir = mesh_resmut.primalization.patch_graph.edges[edge_id].direction.unwrap();
