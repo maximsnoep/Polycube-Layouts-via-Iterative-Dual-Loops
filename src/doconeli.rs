@@ -41,6 +41,7 @@ pub struct Face {
 
     // Auxiliary data
     pub color: Color,
+    pub label: Option<usize>,
     pub normal: Vec3,
     pub dual_position: Option<Vec3>,
     pub dual_normal: Option<Vec3>,
@@ -57,6 +58,7 @@ pub struct Edge {
 
     // Auxiliary data
     pub label: Option<usize>,
+    pub face_labels: Option<(usize, usize)>,
     pub part_of_path: Option<usize>,
     pub edges_between: Option<Vec<usize>>,
     pub edges_between_endpoints: Option<(usize, usize)>,
@@ -592,6 +594,7 @@ impl Doconeli {
         self.faces.push(Face {
             some_edge: Some(e_12),
             color: self.faces[face_id].color,
+            label: None,
             normal: self.faces[face_id].normal,
             dual_position: self.faces[face_id].dual_position,
             dual_normal: self.faces[face_id].dual_normal,
@@ -603,6 +606,7 @@ impl Doconeli {
         self.faces.push(Face {
             some_edge: Some(e_20),
             color: self.faces[face_id].color,
+            label: None,
             normal: self.faces[face_id].normal,
             dual_position: self.faces[face_id].dual_position,
             dual_normal: self.faces[face_id].dual_normal,
@@ -734,6 +738,7 @@ impl Doconeli {
         let f_2 = self.faces.len();
         self.faces.push(Face {
             some_edge: Some(e_b0),
+            label: self.faces[f_1].label,
             color: self.faces[f_0].color,
             normal: self.faces[f_0].normal,
             dual_position: self.faces[f_0].dual_position,
@@ -745,6 +750,7 @@ impl Doconeli {
         let f_3 = self.faces.len();
         self.faces.push(Face {
             some_edge: Some(e_1b),
+            label: self.faces[f_1].label,
             color: self.faces[f_1].color,
             normal: self.faces[f_1].normal,
             dual_position: self.faces[f_1].dual_position,

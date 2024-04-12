@@ -299,6 +299,108 @@ impl Duaprima {
         });
     }
 
+    pub fn precompute_label_weights(
+        &mut self,
+        target_labels: (usize, usize),
+        face_labels: HashMap<usize, usize>,
+        edge_labels: HashMap<(usize, usize), (usize, usize)>,
+    ) {
+        let cutting_path = target_labels.0 != target_labels.1;
+
+        self.nodes.keys().for_each(|v_i| {
+            (0..self.neighbors[v_i].len()).for_each(|j| {
+                let v_j = self.neighbors[v_i][j].0;
+
+                self.neighbors.entry(*v_i).and_modify(|node_neighbors| {
+                    let mut mult = 1.;
+
+                    // if not a cutting_path, then we want any edges that have target_labels.0 in the labels
+                    if !cutting_path {
+                        match (
+                            self.nodes[v_i].node_type.clone(),
+                            self.nodes[&v_j].node_type.clone(),
+                        ) {
+                            (NodeType::Vertex(i), NodeType::Vertex(j)) => {
+                                let edge_label = edge_labels.get(&(i, j));
+                                if edge_label.is_some() {
+                                    if edge_label == Some(&(target_labels.0, target_labels.1))
+                                        || edge_label == Some(&(target_labels.1, target_labels.0))
+                                    {
+                                        mult = 0.25;
+                                    }
+                                }
+                                let edge_label = edge_labels.get(&(j, i));
+                                if edge_label.is_some() {
+                                    if edge_label == Some(&(target_labels.0, target_labels.1))
+                                        || edge_label == Some(&(target_labels.1, target_labels.0))
+                                    {
+                                        mult = 0.25;
+                                    }
+                                }
+                            }
+                            (NodeType::Vertex(i), NodeType::Face(j)) => {
+                                if face_labels.get(&j) == Some(&target_labels.0) {
+                                    mult = 0.5;
+                                }
+                            }
+                            (NodeType::Face(i), NodeType::Vertex(j)) => {
+                                if face_labels.get(&i) == Some(&target_labels.0) {
+                                    mult = 0.5;
+                                }
+                            }
+                            (NodeType::Face(i), NodeType::Face(j)) => {
+                                if face_labels.get(&i) == Some(&target_labels.0)
+                                    && face_labels.get(&j) == Some(&target_labels.0)
+                                {
+                                    mult = 0.5;
+                                }
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        // this is a cutting path, so we want the edge to have target_labels.0 and target_labels.1, preferably we do not want to cross faces!
+                        match (
+                            self.nodes[v_i].node_type.clone(),
+                            self.nodes[&v_j].node_type.clone(),
+                        ) {
+                            (NodeType::Vertex(i), NodeType::Vertex(j)) => {
+                                let edge_label = edge_labels.get(&(i, j));
+                                if edge_label.is_some() {
+                                    if edge_label == Some(&(target_labels.0, target_labels.1))
+                                        || edge_label == Some(&(target_labels.1, target_labels.0))
+                                    {
+                                        mult = 0.0001;
+                                    }
+                                }
+                                let edge_label = edge_labels.get(&(j, i));
+                                if edge_label.is_some() {
+                                    if edge_label == Some(&(target_labels.0, target_labels.1))
+                                        || edge_label == Some(&(target_labels.1, target_labels.0))
+                                    {
+                                        mult = 0.0001;
+                                    }
+                                }
+                            }
+                            (NodeType::Vertex(i), NodeType::Face(j)) => {
+                                mult = 5.;
+                            }
+                            (NodeType::Face(i), NodeType::Vertex(j)) => {
+                                mult = 5.;
+                            }
+                            (NodeType::Face(i), NodeType::Face(j)) => {
+                                mult = 2.;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    node_neighbors[j].1 =
+                        self.nodes[v_i].position.distance(self.nodes[&v_j].position) * mult
+                });
+            })
+        });
+    }
+
     pub fn precompute_angular_loopy_weights(&mut self, principal_direction: Vec3) {
         self.nodes.keys().for_each(|v_i| {
             let mut filter_neighbors = vec![];

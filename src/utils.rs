@@ -138,6 +138,20 @@ pub const PARULA: [Color; 19] = [
     PARULA_18, PARULA_19,
 ];
 
+// CB dark red: rgb(226, 26, 27) ranged from 0.0 to 1.0
+pub const COLOR_PRIMARY_X: Color = Color::rgb(0.8862745098, 0.10196078431, 0.10588235294);
+// CB dark blue: rgb(30, 119, 179) ranged from 0.0 to 1.0
+pub const COLOR_PRIMARY_Y: Color = Color::rgb(0.11764705882, 0.46666666666, 0.70196078431);
+// CB yellow: rgb(255, 215, 0) ranged from 0.0 to 1.0
+pub const COLOR_PRIMARY_Z: Color = Color::rgb(1., 1., 0.6);
+
+// CB light red: rgb(250, 153, 153) ranged from 0.0 to 1.0
+pub const COLOR_PRIMARY_X_LIGHT: Color = Color::rgb(0.98039215686, 0.6, 0.6);
+// CB light blue: rgb(166, 205, 226) ranged from 0.0 to 1.0
+pub const COLOR_PRIMARY_Y_LIGHT: Color = Color::rgb(0.65098039215, 0.80392156862, 0.8862745098);
+// white: rgb(255, 255, 255) ranged from 0.0 to 1.0
+pub const COLOR_PRIMARY_Z_LIGHT: Color = Color::rgb(1.0, 1.0, 0.8);
+
 pub fn color_map(value: f32, colors: Vec<Color>) -> Color {
     let index = (value * (colors.len() - 1) as f32).round() as usize;
     colors[index]
@@ -477,6 +491,15 @@ pub fn get_bevy_mesh_of_mesh(
     for face_id in 0..mesh.faces.len() {
         let color = match color_type {
             ColorType::Static(c) => c,
+            ColorType::Labeling => match mesh.faces[face_id].label {
+                Some(0) => COLOR_PRIMARY_X,
+                Some(1) => COLOR_PRIMARY_X_LIGHT,
+                Some(2) => COLOR_PRIMARY_Y,
+                Some(3) => COLOR_PRIMARY_Y_LIGHT,
+                Some(4) => COLOR_PRIMARY_Z,
+                Some(5) => COLOR_PRIMARY_Z_LIGHT,
+                _ => Color::WHITE,
+            },
             _ => mesh.faces[face_id].color,
         };
 

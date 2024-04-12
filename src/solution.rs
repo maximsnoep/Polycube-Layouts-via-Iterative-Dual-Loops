@@ -171,7 +171,7 @@ impl Primalization {
                     position: self.original_mesh.get_position_of_vertex(inner_vertex),
                     normal: self.original_mesh.get_normal_of_vertex(inner_vertex),
                     region_id,
-                    weight: 2,
+                    weight: 50,
                 });
             }
 
@@ -546,6 +546,84 @@ impl Primalization {
 
             // Find path for each pair
             for pair_id in 0..region_pairs.len() {
+                for face in 0..self.granulated_mesh.faces.len() {
+                    let normal = self.granulated_mesh.get_normal_of_face(face);
+
+                    // find the best label (direction), based on smallest angle with normal of face
+                    let best_label = [
+                        (PrincipalDirection::X, 1.0),
+                        (PrincipalDirection::X, -1.0),
+                        (PrincipalDirection::Y, 1.0),
+                        (PrincipalDirection::Y, -1.0),
+                        (PrincipalDirection::Z, 1.0),
+                        (PrincipalDirection::Z, -1.0),
+                    ]
+                    .iter()
+                    .map(|x| (x, normal.angle_between(x.1 * x.0.to_vector())))
+                    .collect_vec()
+                    .into_iter()
+                    .min_by(|x, y| x.1.partial_cmp(&y.1).unwrap())
+                    .unwrap();
+
+                    let label = match best_label.0 {
+                        (PrincipalDirection::X, 1.0) => 0,
+                        (PrincipalDirection::X, -1.0) => 1,
+                        (PrincipalDirection::Y, 1.0) => 2,
+                        (PrincipalDirection::Y, -1.0) => 3,
+                        (PrincipalDirection::Z, 1.0) => 4,
+                        (PrincipalDirection::Z, -1.0) => 5,
+                        _ => 999,
+                    };
+
+                    self.granulated_mesh.faces[face].label = Some(label);
+                }
+
+                // for each edge in mesh, color each edge depending on the two adjacent faces
+                for edge in 0..self.granulated_mesh.edges.len() {
+                    let (face_1, face_2) = self.granulated_mesh.get_faces_of_edge(edge);
+                    let label_1 = self.granulated_mesh.faces[face_1].label.unwrap();
+                    let label_2 = self.granulated_mesh.faces[face_2].label.unwrap();
+
+                    self.granulated_mesh.edges[edge].face_labels = Some((label_1, label_2));
+                }
+
+                let mut face_labels = HashMap::new();
+                let mut edge_labels = HashMap::new();
+                for face_id in 0..self.granulated_mesh.faces.len() {
+                    let label = self.granulated_mesh.faces[face_id].label.unwrap();
+                    let real_label = match label {
+                        0 => 0,
+                        1 => 0,
+                        2 => 1,
+                        3 => 1,
+                        4 => 2,
+                        5 => 2,
+                        _ => 999,
+                    };
+                    face_labels.insert(face_id, real_label);
+                }
+                for edge_id in 0..self.granulated_mesh.edges.len() {
+                    let labels = self.granulated_mesh.edges[edge_id].face_labels.unwrap();
+                    let real_labels: (usize, usize) = [labels.0, labels.1]
+                        .iter()
+                        .map(|&label| match label {
+                            0 => 0,
+                            1 => 0,
+                            2 => 1,
+                            3 => 1,
+                            4 => 2,
+                            5 => 2,
+                            _ => 999,
+                        })
+                        .collect_tuple()
+                        .unwrap();
+
+                    edge_labels.insert(
+                        self.granulated_mesh.get_endpoints_of_edge(edge_id),
+                        real_labels,
+                    );
+                }
+
                 let (_, original_edge_id) = region_pairs[pair_id];
 
                 let (region_u, region_v) = self.patch_graph.get_endpoints_of_edge(original_edge_id);
@@ -640,7 +718,75 @@ impl Primalization {
                             remove_vertices,
                             remove_edges,
                         );
-                        ggg.precompute_euclidean_weights();
+
+                        // find target_labels (look at the two regions that need to be connected)
+                        // we have the two regions
+                        // these two regions MUST be adjacent faces in the intersection graph
+                        assert!(
+                            self.dual
+                                .intersection_graph
+                                .get_neighbors_of_face_edgewise(region_u)
+                                .iter()
+                                .find(|&&x| x == region_v)
+                                .unwrap()
+                                == &region_v
+                        );
+
+                        let edge_between_regions = self
+                            .dual
+                            .intersection_graph
+                            .get_edge_of_face_and_face(region_u, region_v)
+                            .unwrap();
+
+                        let (intersection_a, intersection_b) = self
+                            .dual
+                            .intersection_graph
+                            .get_endpoints_of_edge(edge_between_regions);
+
+                        println!(
+                            "intersection_a {}   intersection_b {}  ordering_a {:?}  ordering_b {:?}",
+                            intersection_a,
+                            intersection_b,
+                            self.dual.intersection_graph.vertices[intersection_a].ordering,
+                            self.dual.intersection_graph.vertices[intersection_b].ordering,
+                        );
+
+                        let intersection_a_labels = self.dual.intersection_graph.vertices
+                            [intersection_a]
+                            .ordering
+                            .iter()
+                            .map(|(label, _)| label.to_owned())
+                            .collect::<HashSet<_>>();
+
+                        let all_directions = [0, 1, 2];
+
+                        // direction of an intersection is the third label that is missing
+                        let intersection_a_direction = intersection_a_labels
+                            .symmetric_difference(&all_directions.iter().cloned().collect())
+                            .next()
+                            .unwrap()
+                            .to_owned();
+
+                        let intersection_b_labels = self.dual.intersection_graph.vertices
+                            [intersection_b]
+                            .ordering
+                            .iter()
+                            .map(|(label, _)| label.to_owned())
+                            .collect::<HashSet<_>>();
+
+                        let intersection_b_direction = intersection_b_labels
+                            .symmetric_difference(&all_directions.iter().cloned().collect())
+                            .next()
+                            .unwrap()
+                            .to_owned();
+
+                        let target_labels = (intersection_a_direction, intersection_b_direction);
+
+                        ggg.precompute_label_weights(
+                            target_labels,
+                            face_labels.clone(),
+                            edge_labels.clone(),
+                        );
 
                         println!("done removing");
 

@@ -136,6 +136,7 @@ pub enum RenderType {
     RegionsMesh,
     PatchesMesh,
     PatchesInnerMesh,
+    NaiveLabeling,
     Polycube,
     DistortionFlatness,
     DistortionAlignment,
@@ -151,7 +152,8 @@ pub enum ColorType {
     DirectionSecondary,
     DistortionAlignment,
     DistortionFlatness,
-    DistortionJacobian
+    DistortionJacobian,
+    Labeling
 }
 impl Default for ColorType {
     fn default() -> Self {
@@ -625,6 +627,7 @@ pub fn handle_events(
                     };
 
                     let surface = Surface {
+                        id: intersection_id,
                         faces: vec![subface],
                         inner_vertices: HashSet::new(),
                         direction: Some(direction.to_owned()),
@@ -636,11 +639,6 @@ pub fn handle_events(
 
 
                 }
-
-
-
-            },
-            ActionEvent::StepPrimalize => {
 
                 // for each loop edge segment, we find a split such that the two surfaces are balanced (with respect to normal direction of the faces inbetween)
                 let mut splits = vec![None; mesh_resmut.sol.intersection_graph.edges.len()];
@@ -714,81 +712,40 @@ pub fn handle_events(
 
                     splits[edge_id] = Some(split);
 
-                    // add to surface_1
-                    for &face_to_add in faces_between.iter().take(split) {
-                        let subface = Subface {
-                            face_id: face_to_add,
-                            bounding_points: mesh_resmut.mesh.get_vertices_of_face(face_to_add).iter().map(|&x| (mesh_resmut.mesh.get_position_of_vertex(x), mesh_resmut.mesh.get_normal_of_face(face_to_add))).collect_vec(),
-                            distortion: None,
-                        };
-                        mesh_resmut.primalization2.patch_to_surface[surface_1].as_mut().unwrap().faces.push(subface);
-                    }
-
-                    // add to surface_2
-                    for &face_to_add in faces_between.iter().skip(split) {
-                        let subface = Subface {
-                            face_id: face_to_add,
-                            bounding_points: mesh_resmut.mesh.get_vertices_of_face(face_to_add).iter().map(|&x| (mesh_resmut.mesh.get_position_of_vertex(x), mesh_resmut.mesh.get_normal_of_face(face_to_add))).collect_vec(),
-                            distortion: None,
-                        };
-                        mesh_resmut.primalization2.patch_to_surface[surface_2].as_mut().unwrap().faces.push(subface);
-                    }
-
                 }
 
-                // For each patch, select a center point (vertex). Then, connect that center to each of the splits in the boundary of the patch
-                // Go through all vertices, pick the vertex that is closest to the center of the patch
-                // Then, connect that vertex to the splits in the boundary of the patch
+                // for each face in mesh, color each face depending on closest label
+                for face in 0..mesh_resmut.mesh.faces.len() {
+                    let normal = mesh_resmut.mesh.get_normal_of_face(face);
 
-                mesh_resmut.primalization = Primalization::initialize(&mesh_resmut.mesh, &mesh_resmut.sol);
-
-                let singularities = mesh_resmut.get_top_n_percent_singularities(configuration.percent_singularities);
-                mesh_resmut.primalization.place_primals(singularities, &configuration);
-
-                for region_id in 0..mesh_resmut.primalization.region_to_primal.len() {
-
-                    if let PrimalVertexType::Vertex(primal_id) = mesh_resmut.primalization.region_to_primal[region_id].as_ref().unwrap().vertex_type {
-                        // shortest path from this center (in granulated mesh) to the splits in the boundary of the patch
-                        
-                        // the vertices of the region
-                        let inner_vertices = mesh_resmut.sol.regions[region_id].inner_vertices.clone();
-                        // find all boundaries (all that share inner vertex)
-                        let mut boundaries = vec![];
-                        for loop_segment_id in 0..mesh_resmut.sol.intersection_graph.edges.len() {
-                            let edges_on_loop = mesh_resmut.sol.intersection_graph.edges[loop_segment_id].edges_between.as_ref().unwrap();
-                            if edges_on_loop.iter().any(|&x| inner_vertices.contains(&mesh_resmut.mesh.get_endpoints_of_edge(x).0) || inner_vertices.contains(&mesh_resmut.mesh.get_endpoints_of_edge(x).1)) {
-                                boundaries.push(loop_segment_id);
-                            }
-                        }
-
-                        println!("region {:?}", region_id);
-                        println!("boundaries {:?}", boundaries);
-
-                        // let mut ggg: Duaprima = Duaprima::from_mesh_with_mask(
-                        //     &mesh_resmut.primalization.granulated_mesh,
-                        //     HashSet::new(),
-                        //     HashSet::new(),
-                        // );
-                        // ggg.precompute_euclidean_weights();
-
-                        // // we are in a region, this region has a boundary of loop segments
-                        // let boundary = mesh_resmut.sol.
-                        // // we want to find the shortest path from the center to the splits in the boundary of the patch
-
-
-                        // if let Some(path) = ggg.shortest_path(center, split_endpoint_1) {
-                        //     println!("found path..");
-
-                        // }
-
-                        
-
-                    }
+                    // find the best label (direction), based on smallest angle with normal of face
+                    let best_label = [(PrincipalDirection::X, 1.0), (PrincipalDirection::X, -1.0), (PrincipalDirection::Y, 1.0), (PrincipalDirection::Y, -1.0), (PrincipalDirection::Z, 1.0), (PrincipalDirection::Z, -1.0)].iter().map(|x| (x, normal.angle_between(x.1 * x.0.to_vector()))).collect_vec().into_iter().min_by(|x, y| x.1.partial_cmp(&y.1).unwrap()).unwrap();
                     
+                    let label = match best_label.0 {
+                        (PrincipalDirection::X, 1.0) => 0,
+                        (PrincipalDirection::X, -1.0) => 1,
+                        (PrincipalDirection::Y, 1.0) => 2,
+                        (PrincipalDirection::Y, -1.0) => 3,
+                        (PrincipalDirection::Z, 1.0) => 4,
+                        (PrincipalDirection::Z, -1.0) => 5,
+                        _ => 999,
+                    };
 
+                    mesh_resmut.mesh.faces[face].label = Some(label);
                 }
-                
 
+                // for each edge in mesh, color each edge depending on the two adjacent faces
+                for edge in 0..mesh_resmut.mesh.edges.len() {
+                    let (face_1, face_2) = mesh_resmut.mesh.get_faces_of_edge(edge);
+                    let label_1 = mesh_resmut.mesh.faces[face_1].label.unwrap();
+                    let label_2 = mesh_resmut.mesh.faces[face_2].label.unwrap();
+
+                    mesh_resmut.mesh.edges[edge].face_labels = Some((label_1, label_2));
+                }
+
+
+            },
+            ActionEvent::StepPrimalize => {
 
             },
         }
@@ -877,21 +834,6 @@ fn update_mesh(
 
     let mesh = match configuration.render_type {
         RenderType::Original => get_bevy_mesh_of_mesh(&mesh_resmut.mesh, ColorType::Static(configuration.color_foreground.into()), &configuration),
-        // RenderType::Regions => get_bevy_mesh_of_regions(
-        //     &mesh_resmut.sol.cached_subsurfaces_regions,
-        //     ColorType::DirectionSecondary,
-        //     &configuration,
-        // ),
-        // RenderType::Patches => get_bevy_mesh_of_regions(
-        //     &mesh_resmut.sol.cached_subsurfaces_patches,
-        //     ColorType::DirectionPrimary,
-        //     &configuration,
-        // ),
-        // RenderType::PatchesWithDistortion => get_bevy_mesh_of_regions(
-        //     &mesh_resmut.sol.cached_subsurfaces_patches,
-        //     ColorType::Distortion,
-        //     &configuration,
-        // ),
         RenderType::RegionsMesh => get_bevy_mesh_of_graph(&mesh_resmut.sol.intersection_graph, ColorType::Static(Color::BLACK), &configuration),
         RenderType::PatchesMesh => {
             if configuration.black {
@@ -907,6 +849,7 @@ fn update_mesh(
                 get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.patch_graph, &mesh_resmut.primalization.granulated_mesh,ColorType::DirectionPrimary, &configuration)
             }
         },
+        RenderType::NaiveLabeling => get_bevy_mesh_of_mesh(&mesh_resmut.mesh, ColorType::Labeling, &configuration),
         RenderType::DistortionAlignment => {
             get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.patch_graph, &mesh_resmut.primalization.granulated_mesh,ColorType::DistortionAlignment, &configuration)
         },
@@ -1056,88 +999,88 @@ fn draw_gizmos(
 
     }
 
-    if true {
+    // if true {
 
-        for primal in &mesh_resmut.primalization.region_to_primal {
-            if let Some(primal) = primal {
+    //     for primal in &mesh_resmut.primalization.region_to_primal {
+    //         if let Some(primal) = primal {
 
-                let color = Color::BLACK;
+    //             let color = Color::BLACK;
 
-                gizmos.line(
-                    transform_coordinates(
-                        configuration.translation,
-                        configuration.scale,
-                        primal.position,
-                    ),
-                    transform_coordinates(
-                        configuration.translation,
-                        configuration.scale,
-                        primal.position + primal.normal * 0.1,
-                    ),
-                    color,
-                );
+    //             gizmos.line(
+    //                 transform_coordinates(
+    //                     configuration.translation,
+    //                     configuration.scale,
+    //                     primal.position,
+    //                 ),
+    //                 transform_coordinates(
+    //                     configuration.translation,
+    //                     configuration.scale,
+    //                     primal.position + primal.normal * 0.1,
+    //                 ),
+    //                 color,
+    //             );
                 
-            }
-        }
+    //         }
+    //     }
 
-        for edge_id in 0..mesh_resmut.primalization.patch_graph.edges.len() {
-            if let Some(path) = &mesh_resmut.primalization.edge_to_paths[edge_id] {
-                let dir = mesh_resmut.primalization.patch_graph.edges[edge_id].direction.unwrap();
-                let color = get_color(dir, true, &configuration);
+    //     for edge_id in 0..mesh_resmut.primalization.patch_graph.edges.len() {
+    //         if let Some(path) = &mesh_resmut.primalization.edge_to_paths[edge_id] {
+    //             let dir = mesh_resmut.primalization.patch_graph.edges[edge_id].direction.unwrap();
+    //             let color = get_color(dir, true, &configuration);
 
-                for edge in path.windows(2) {
-                    let u = edge[0];
-                    let v = edge[1];
+    //             for edge in path.windows(2) {
+    //                 let u = edge[0];
+    //                 let v = edge[1];
 
-                    gizmos.line(
-                        transform_coordinates(
-                            configuration.translation + mesh_resmut.primalization.granulated_mesh.get_normal_of_vertex(u) * 0.01,
-                            configuration.scale,
-                            mesh_resmut
-                                .primalization
-                                .granulated_mesh.get_position_of_vertex(u),
-                        ),
-                        transform_coordinates(
-                            configuration.translation + mesh_resmut.primalization.granulated_mesh.get_normal_of_vertex(v) * 0.01,
-                            configuration.scale,
-                            mesh_resmut.primalization.granulated_mesh.get_position_of_vertex(v)
-                        ),
-                        color,
-                    );
-                }
-            }
-        }
-    }
+    //                 gizmos.line(
+    //                     transform_coordinates(
+    //                         configuration.translation + mesh_resmut.primalization.granulated_mesh.get_normal_of_vertex(u) * 0.01,
+    //                         configuration.scale,
+    //                         mesh_resmut
+    //                             .primalization
+    //                             .granulated_mesh.get_position_of_vertex(u),
+    //                     ),
+    //                     transform_coordinates(
+    //                         configuration.translation + mesh_resmut.primalization.granulated_mesh.get_normal_of_vertex(v) * 0.01,
+    //                         configuration.scale,
+    //                         mesh_resmut.primalization.granulated_mesh.get_position_of_vertex(v)
+    //                     ),
+    //                     color,
+    //                 );
+    //             }
+    //         }
+    //     }
+    // }
 
-    if true {
-        for edge_id in 0..mesh_resmut.primalization.patch_graph.edges.len() {
-            if let Some(path) = &mesh_resmut.primalization.edge_to_paths[edge_id] {
-                let dir = mesh_resmut.primalization.patch_graph.edges[edge_id].direction.unwrap();
-                let color = get_color(dir, true, &configuration);
+    // if true {
+    //     for edge_id in 0..mesh_resmut.primalization2.patch_graph.edges.len() {
+    //         if let Some(path) = &mesh_resmut.primalization2.edge_to_paths[edge_id] {
+    //             let dir = mesh_resmut.primalization2.patch_graph.edges[edge_id].direction.unwrap();
+    //             let color = get_color(dir, true, &configuration);
 
-                for edge in path.windows(2) {
-                    let u = edge[0];
-                    let v = edge[1];
+    //             for edge in path.windows(2) {
+    //                 let u = edge[0];
+    //                 let v = edge[1];
 
-                    gizmos.line(
-                        transform_coordinates(
-                            configuration.translation + mesh_resmut.primalization.granulated_mesh.get_normal_of_vertex(u) * 0.01,
-                            configuration.scale,
-                            mesh_resmut
-                                .primalization
-                                .granulated_mesh.get_position_of_vertex(u),
-                        ),
-                        transform_coordinates(
-                            configuration.translation + mesh_resmut.primalization.granulated_mesh.get_normal_of_vertex(v) * 0.01,
-                            configuration.scale,
-                            mesh_resmut.primalization.granulated_mesh.get_position_of_vertex(v)
-                        ),
-                        color,
-                    );
-                }
-            }
-        }
-    }
+    //                 gizmos.line(
+    //                     transform_coordinates(
+    //                         configuration.translation + mesh_resmut.primalization2.granulated_mesh.get_normal_of_vertex(u) * 0.01,
+    //                         configuration.scale,
+    //                         mesh_resmut
+    //                             .primalization2
+    //                             .granulated_mesh.get_position_of_vertex(u),
+    //                     ),
+    //                     transform_coordinates(
+    //                         configuration.translation + mesh_resmut.primalization2.granulated_mesh.get_normal_of_vertex(v) * 0.01,
+    //                         configuration.scale,
+    //                         mesh_resmut.primalization2.granulated_mesh.get_position_of_vertex(v)
+    //                     ),
+    //                     color,
+    //                 );
+    //             }
+    //         }
+    //     }
+    // }
 
     if configuration.draw_wireframe && configuration.render_type == RenderType::Original {
         self::draw_graph_edges(
