@@ -139,6 +139,7 @@ pub enum RenderType {
     Polycube,
     DistortionFlatness,
     DistortionAlignment,
+    DistortionJacobian,
     Nothing,
 }
 
@@ -149,7 +150,8 @@ pub enum ColorType {
     DirectionPrimary,
     DirectionSecondary,
     DistortionAlignment,
-    DistortionFlatness
+    DistortionFlatness,
+    DistortionJacobian
 }
 impl Default for ColorType {
     fn default() -> Self {
@@ -900,17 +902,20 @@ fn update_mesh(
         },
         RenderType::PatchesInnerMesh => {
             if configuration.black {
-                get_bevy_mesh_of_regions(&mesh_resmut.primalization2.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization2.granulated_mesh, ColorType::Static(Color::BLACK), &configuration)
+                get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.patch_graph, &mesh_resmut.primalization.granulated_mesh, ColorType::Static(Color::BLACK), &configuration)
             } else {
-                get_bevy_mesh_of_regions(&mesh_resmut.primalization2.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization2.granulated_mesh,ColorType::DirectionPrimary, &configuration)
+                get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.patch_graph, &mesh_resmut.primalization.granulated_mesh,ColorType::DirectionPrimary, &configuration)
             }
         },
         RenderType::DistortionAlignment => {
-            get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.granulated_mesh,ColorType::DistortionAlignment, &configuration)
+            get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.patch_graph, &mesh_resmut.primalization.granulated_mesh,ColorType::DistortionAlignment, &configuration)
         },
         RenderType::DistortionFlatness => {
-            get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.granulated_mesh, ColorType::DistortionFlatness, &configuration)
+            get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.patch_graph, &mesh_resmut.primalization.granulated_mesh, ColorType::DistortionFlatness, &configuration)
         },
+        RenderType::DistortionJacobian => {
+            get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.patch_graph, &mesh_resmut.primalization.granulated_mesh, ColorType::DistortionJacobian, &configuration)
+        }
         RenderType::Polycube => {
             if configuration.black {
                 get_bevy_mesh_of_graph(&mesh_resmut.primalization.polycube_graph, ColorType::Static(Color::BLACK), &configuration)
