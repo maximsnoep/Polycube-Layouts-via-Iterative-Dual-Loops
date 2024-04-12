@@ -10,7 +10,8 @@ use crate::{
     },
     ColorType, Configuration,
 };
-
+use nalgebra::Matrix4x2;
+use nalgebra::{Matrix2, Matrix2x4};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -82,6 +83,7 @@ pub struct Subface {
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct Surface {
+    pub id: usize,
     pub faces: Vec<Subface>,
     pub inner_vertices: HashSet<usize>,
     pub direction: Option<PrincipalDirection>,
@@ -859,6 +861,7 @@ impl Primalization {
             .next();
 
             let surface = Surface {
+                id: patch_id,
                 faces: subfaces,
                 inner_vertices: all_vertices,
                 direction: dir,
@@ -922,11 +925,153 @@ impl Primalization {
 
             println!("ALIGNMENT: max_dev {max_alignment_dev}, min_dev {min_alignment_dev}, avg_dev {avg_alignment_dev}, avg_dev_scaled {avg_alignment_dev_scaled}");
 
+            // compute Jacobian of the patch
+            let corners = self.patch_graph.get_vertices_of_face(patch_id);
+            let corner_positions = corners
+                .iter()
+                .map(|&vertex_id| self.patch_graph.vertices[vertex_id].position)
+                .collect_vec();
+            assert!(corners.len() == 4);
+
+            println!("corner_positions: {corner_positions:?}");
+
+            let quad = match (surface.direction, positive < 0.) {
+                (Some(PrincipalDirection::X), false) => {
+                    let mut m = Matrix4x2::zeros();
+                    m[(0, 0)] = corner_positions[3].y;
+                    m[(0, 1)] = corner_positions[3].z;
+                    m[(1, 0)] = corner_positions[2].y;
+                    m[(1, 1)] = corner_positions[2].z;
+                    m[(2, 0)] = corner_positions[1].y;
+                    m[(2, 1)] = corner_positions[1].z;
+                    m[(3, 0)] = corner_positions[0].y;
+                    m[(3, 1)] = corner_positions[0].z;
+                    m
+                }
+                (Some(PrincipalDirection::Y), true) => {
+                    let mut m = Matrix4x2::zeros();
+                    m[(0, 0)] = corner_positions[3].x;
+                    m[(0, 1)] = corner_positions[3].z;
+                    m[(1, 0)] = corner_positions[2].x;
+                    m[(1, 1)] = corner_positions[2].z;
+                    m[(2, 0)] = corner_positions[1].x;
+                    m[(2, 1)] = corner_positions[1].z;
+                    m[(3, 0)] = corner_positions[0].x;
+                    m[(3, 1)] = corner_positions[0].z;
+                    m
+                }
+                (Some(PrincipalDirection::Z), false) => {
+                    let mut m = Matrix4x2::zeros();
+                    m[(0, 0)] = corner_positions[3].x;
+                    m[(0, 1)] = corner_positions[3].y;
+                    m[(1, 0)] = corner_positions[2].x;
+                    m[(1, 1)] = corner_positions[2].y;
+                    m[(2, 0)] = corner_positions[1].x;
+                    m[(2, 1)] = corner_positions[1].y;
+                    m[(3, 0)] = corner_positions[0].x;
+                    m[(3, 1)] = corner_positions[0].y;
+                    m
+                }
+                (Some(PrincipalDirection::X), true) => {
+                    let mut m = Matrix4x2::zeros();
+                    m[(0, 0)] = corner_positions[0].y;
+                    m[(0, 1)] = corner_positions[0].z;
+                    m[(1, 0)] = corner_positions[1].y;
+                    m[(1, 1)] = corner_positions[1].z;
+                    m[(2, 0)] = corner_positions[2].y;
+                    m[(2, 1)] = corner_positions[2].z;
+                    m[(3, 0)] = corner_positions[3].y;
+                    m[(3, 1)] = corner_positions[3].z;
+                    m
+                }
+                (Some(PrincipalDirection::Y), false) => {
+                    let mut m = Matrix4x2::zeros();
+                    m[(0, 0)] = corner_positions[0].x;
+                    m[(0, 1)] = corner_positions[0].z;
+                    m[(1, 0)] = corner_positions[1].x;
+                    m[(1, 1)] = corner_positions[1].z;
+                    m[(2, 0)] = corner_positions[2].x;
+                    m[(2, 1)] = corner_positions[2].z;
+                    m[(3, 0)] = corner_positions[3].x;
+                    m[(3, 1)] = corner_positions[3].z;
+                    m
+                }
+                (Some(PrincipalDirection::Z), true) => {
+                    let mut m = Matrix4x2::zeros();
+                    m[(0, 0)] = corner_positions[0].x;
+                    m[(0, 1)] = corner_positions[0].y;
+                    m[(1, 0)] = corner_positions[1].x;
+                    m[(1, 1)] = corner_positions[1].y;
+                    m[(2, 0)] = corner_positions[2].x;
+                    m[(2, 1)] = corner_positions[2].y;
+                    m[(3, 0)] = corner_positions[3].x;
+                    m[(3, 1)] = corner_positions[3].y;
+                    m
+                }
+                _ => Matrix4x2::from_vec(
+                    corner_positions
+                        .iter()
+                        .map(|&pos| vec![0., 0.])
+                        .flatten()
+                        .collect(),
+                ),
+            };
+
+            println!("quad: {quad}");
+
+            for (i, n, z) in [(0, -1., -1.), (1, 1., -1.), (2, 1., 1.), (3, -1., 1.)] {
+                // get distance (length) between p1 and p2
+                let length1 = Vec2::from([quad.row(i)[0], quad.row(i)[1]]).distance(Vec2::from([
+                    quad.row((i - 1) % 4)[0],
+                    quad.row((i - 1) % 4)[1],
+                ]));
+
+                // get distance (length) between p2 and p3
+                let length2 = Vec2::from([quad.row(i)[0], quad.row(i)[1]]).distance(Vec2::from([
+                    quad.row((i + 1) % 4)[0],
+                    quad.row((i + 1) % 4)[1],
+                ]));
+
+                let jacobian = jacobian(n, z, &quad);
+                let det_jacobian = det_jacobian(n, z, &quad);
+                let scaled_det_jacobian = det_jacobian / ((length1 / 2.) * (length2 / 2.));
+
+                println!("jacobian: {jacobian}");
+                println!("det_jacobian: {det_jacobian}");
+                println!("scaled det_jacobian: {scaled_det_jacobian}");
+
+                println!("---\n\n");
+            }
+
             println!("---\n\n");
 
             self.patch_to_surface[patch_id] = Some(surface);
         }
     }
+}
+
+// Derivatives of shape functions with respect to xi and eta
+pub fn dphi(n: f32, z: f32) -> Matrix4x2<f32> {
+    let mut m = Matrix4x2::zeros();
+
+    m[(0, 0)] = -0.25 * (1. - n);
+    m[(0, 1)] = -0.25 * (1. - z);
+    m[(1, 0)] = 0.25 * (1. - n);
+    m[(1, 1)] = -0.25 * (1. + z);
+    m[(2, 0)] = 0.25 * (1. + n);
+    m[(2, 1)] = 0.25 * (1. + z);
+    m[(3, 0)] = -0.25 * (1. + n);
+    m[(3, 1)] = 0.25 * (1. - z);
+
+    m
+}
+
+pub fn jacobian(n: f32, z: f32, quad: &Matrix4x2<f32>) -> Matrix2<f32> {
+    dphi(n, z).transpose() * quad
+}
+
+pub fn det_jacobian(n: f32, z: f32, quad: &Matrix4x2<f32>) -> f32 {
+    jacobian(n, z, quad).determinant()
 }
 
 // Given a surface, compute the average normal of the surface (weighted by the area of the faces)
@@ -1550,6 +1695,7 @@ impl MeshResource {
             // };
 
             subsurfaces.push(Surface {
+                id: region_id,
                 faces: subfaces,
                 direction,
                 color: match superedges.len() {

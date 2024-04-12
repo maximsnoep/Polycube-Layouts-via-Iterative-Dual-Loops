@@ -1,6 +1,9 @@
 use crate::{
     doconeli::Doconeli,
-    solution::{compute_average_normal, compute_deviation, PrincipalDirection, Surface},
+    solution::{
+        compute_average_normal, compute_deviation, det_jacobian, jacobian, PrincipalDirection,
+        Surface,
+    },
     ColorType, Configuration,
 };
 use bevy::{
@@ -9,6 +12,7 @@ use bevy::{
     utils::Instant,
 };
 use itertools::Itertools;
+use nalgebra::Matrix4x2;
 use rand::Rng;
 use std::error::Error;
 use std::io::Write;
@@ -142,6 +146,7 @@ pub fn color_map(value: f32, colors: Vec<Color>) -> Color {
 // Construct a mesh object that can be rendered using the Bevy framework.
 pub fn get_bevy_mesh_of_regions(
     regions: &Vec<Surface>,
+    patch_graph: &Doconeli,
     granulated_mesh: &Doconeli,
     color_type: ColorType,
     configuration: &Configuration,
@@ -225,6 +230,133 @@ pub fn get_bevy_mesh_of_regions(
                 / areas.iter().sum::<f32>();
         }
 
+        let mut det_j = 0.;
+        if color_type == ColorType::DistortionJacobian {
+            let avg_normal = compute_average_normal(&surface, &granulated_mesh);
+
+            let positive = surface
+                .direction
+                .unwrap()
+                .to_vector()
+                .dot(avg_normal)
+                .signum();
+
+            let corners = patch_graph.get_vertices_of_face(surface.id);
+            let corner_positions = corners
+                .iter()
+                .map(|&vertex_id| patch_graph.vertices[vertex_id].position)
+                .collect_vec();
+            assert!(corners.len() == 4);
+
+            let quad = match (surface.direction, positive < 0.) {
+                (Some(PrincipalDirection::X), false) => {
+                    let mut m = Matrix4x2::zeros();
+                    m[(0, 0)] = corner_positions[3].y;
+                    m[(0, 1)] = corner_positions[3].z;
+                    m[(1, 0)] = corner_positions[2].y;
+                    m[(1, 1)] = corner_positions[2].z;
+                    m[(2, 0)] = corner_positions[1].y;
+                    m[(2, 1)] = corner_positions[1].z;
+                    m[(3, 0)] = corner_positions[0].y;
+                    m[(3, 1)] = corner_positions[0].z;
+                    m
+                }
+                (Some(PrincipalDirection::Y), true) => {
+                    let mut m = Matrix4x2::zeros();
+                    m[(0, 0)] = corner_positions[3].x;
+                    m[(0, 1)] = corner_positions[3].z;
+                    m[(1, 0)] = corner_positions[2].x;
+                    m[(1, 1)] = corner_positions[2].z;
+                    m[(2, 0)] = corner_positions[1].x;
+                    m[(2, 1)] = corner_positions[1].z;
+                    m[(3, 0)] = corner_positions[0].x;
+                    m[(3, 1)] = corner_positions[0].z;
+                    m
+                }
+                (Some(PrincipalDirection::Z), false) => {
+                    let mut m = Matrix4x2::zeros();
+                    m[(0, 0)] = corner_positions[3].x;
+                    m[(0, 1)] = corner_positions[3].y;
+                    m[(1, 0)] = corner_positions[2].x;
+                    m[(1, 1)] = corner_positions[2].y;
+                    m[(2, 0)] = corner_positions[1].x;
+                    m[(2, 1)] = corner_positions[1].y;
+                    m[(3, 0)] = corner_positions[0].x;
+                    m[(3, 1)] = corner_positions[0].y;
+                    m
+                }
+                (Some(PrincipalDirection::X), true) => {
+                    let mut m = Matrix4x2::zeros();
+                    m[(0, 0)] = corner_positions[0].y;
+                    m[(0, 1)] = corner_positions[0].z;
+                    m[(1, 0)] = corner_positions[1].y;
+                    m[(1, 1)] = corner_positions[1].z;
+                    m[(2, 0)] = corner_positions[2].y;
+                    m[(2, 1)] = corner_positions[2].z;
+                    m[(3, 0)] = corner_positions[3].y;
+                    m[(3, 1)] = corner_positions[3].z;
+                    m
+                }
+                (Some(PrincipalDirection::Y), false) => {
+                    let mut m = Matrix4x2::zeros();
+                    m[(0, 0)] = corner_positions[0].x;
+                    m[(0, 1)] = corner_positions[0].z;
+                    m[(1, 0)] = corner_positions[1].x;
+                    m[(1, 1)] = corner_positions[1].z;
+                    m[(2, 0)] = corner_positions[2].x;
+                    m[(2, 1)] = corner_positions[2].z;
+                    m[(3, 0)] = corner_positions[3].x;
+                    m[(3, 1)] = corner_positions[3].z;
+                    m
+                }
+                (Some(PrincipalDirection::Z), true) => {
+                    let mut m = Matrix4x2::zeros();
+                    m[(0, 0)] = corner_positions[0].x;
+                    m[(0, 1)] = corner_positions[0].y;
+                    m[(1, 0)] = corner_positions[1].x;
+                    m[(1, 1)] = corner_positions[1].y;
+                    m[(2, 0)] = corner_positions[2].x;
+                    m[(2, 1)] = corner_positions[2].y;
+                    m[(3, 0)] = corner_positions[3].x;
+                    m[(3, 1)] = corner_positions[3].y;
+                    m
+                }
+                _ => Matrix4x2::from_vec(
+                    corner_positions
+                        .iter()
+                        .map(|&pos| vec![0., 0.])
+                        .flatten()
+                        .collect(),
+                ),
+            };
+
+            let mut min = f32::MAX;
+
+            for (i, n, z) in [(0, -1., -1.), (1, 1., -1.), (2, 1., 1.), (3, -1., 1.)] {
+                // get distance (length) between p1 and p2
+                let length1 = Vec2::from([quad.row(i)[0], quad.row(i)[1]]).distance(Vec2::from([
+                    quad.row((i - 1) % 4)[0],
+                    quad.row((i - 1) % 4)[1],
+                ]));
+
+                // get distance (length) between p2 and p3
+                let length2 = Vec2::from([quad.row(i)[0], quad.row(i)[1]]).distance(Vec2::from([
+                    quad.row((i + 1) % 4)[0],
+                    quad.row((i + 1) % 4)[1],
+                ]));
+
+                let jacobian = jacobian(n, z, &quad);
+                let det_jacobian = det_jacobian(n, z, &quad);
+                let scaled_det_jacobian = det_jacobian / ((length1 / 2.) * (length2 / 2.));
+
+                if scaled_det_jacobian < min {
+                    min = scaled_det_jacobian;
+                }
+            }
+
+            det_j = min;
+        }
+
         let mut color_f32 = color.as_rgba_f32();
 
         for (i, subface) in surface.faces.iter().enumerate() {
@@ -237,6 +369,15 @@ pub fn get_bevy_mesh_of_regions(
                 let flatness_dev = flatness_devs[i];
 
                 color_f32 = color_map(flatness_dev, PARULA.to_vec()).as_rgba_f32();
+            }
+            if color_type == ColorType::DistortionJacobian {
+                let det_j = det_j;
+
+                color_f32 = color_map(1.0 - det_j, PARULA.to_vec()).as_rgba_f32();
+
+                if det_j <= 0. {
+                    color_f32 = Color::RED.as_rgba_f32();
+                }
             }
 
             for &p1 in &subface.bounding_points {
