@@ -37,7 +37,7 @@ pub struct MeshResource {
     pub graphs: [Mipoga; 3],
 }
 
-#[derive(Default, Clone, EnumIter, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, EnumIter, PartialEq, Eq, Debug, Serialize, Deserialize, Copy)]
 pub enum LoopScoring {
     #[default]
     PathLength,
@@ -120,7 +120,7 @@ impl Primalization {
     // 3. Connect centers with paths for each edge in path_graph
 
     // 1. Make patch_graph from region_graph (by primalization/dualization)
-    pub fn initialize(mesh: &Doconeli, dual: &Solution) -> Primalization {
+    pub fn initialize(mesh: &Doconeli, dual: &Solution) -> Option<Primalization> {
         let mut splitface_to_originalface: HashMap<usize, usize> = HashMap::new();
         for face_id in 0..mesh.faces.len() {
             splitface_to_originalface.insert(face_id, face_id);
@@ -128,10 +128,12 @@ impl Primalization {
 
         let dual_graph = Doconeli::from_dual(&dual.intersection_graph);
         for face_id in 0..dual_graph.faces.len() {
-            assert!(dual_graph.get_neighbors_of_face_edgewise(face_id).len() == 4);
+            if dual_graph.get_neighbors_of_face_edgewise(face_id).len() != 4 {
+                return None;
+            }
         }
 
-        Primalization {
+        Some(Primalization {
             edge_to_paths: vec![None; dual_graph.edges.len()],
             original_mesh: mesh.clone(),
             dual: dual.clone(),
@@ -142,28 +144,19 @@ impl Primalization {
             face_to_splitted: vec![vec![]; mesh.faces.len()],
             splitface_to_originalface,
             patch_to_surface: vec![None; dual_graph.faces.len()],
-        }
+        })
     }
 
-    pub fn place_primals(&mut self, singularities: Vec<usize>, configuration: &Configuration) {
+    pub fn place_primals(
+        &mut self,
+        singularities: Vec<usize>,
+        configuration: &Configuration,
+    ) -> bool {
         // 2. Place centers for each vertex in patch_graph
         let mut region_to_candidates = vec![vec![]; self.dual.regions.len()];
 
         // For every region, get all candidate corner placements
         for (region_id, region) in self.dual.regions.iter().enumerate() {
-            // All singularities in the region are candidates
-            for &singularity in &singularities {
-                if region.inner_vertices.contains(&singularity) {
-                    region_to_candidates[region_id].push(PrimalVertex {
-                        vertex_type: PrimalVertexType::Vertex(singularity),
-                        position: self.original_mesh.get_position_of_vertex(singularity),
-                        normal: self.original_mesh.get_normal_of_vertex(singularity),
-                        region_id,
-                        weight: 1000,
-                    });
-                }
-            }
-
             // Inner vertices are candidates
             for &inner_vertex in &region.inner_vertices {
                 region_to_candidates[region_id].push(PrimalVertex {
@@ -171,7 +164,7 @@ impl Primalization {
                     position: self.original_mesh.get_position_of_vertex(inner_vertex),
                     normal: self.original_mesh.get_normal_of_vertex(inner_vertex),
                     region_id,
-                    weight: 50,
+                    weight: 10,
                 });
             }
 
@@ -186,6 +179,28 @@ impl Primalization {
                     weight: 1,
                 });
             }
+        }
+
+        // Each region has labels inside. Find center for each label. Target should minimize distance to the center of each label
+        let mut region_to_labelcenters = vec![[(Vec3::splat(0.), 0); 6]; self.dual.regions.len()];
+        for region_id in 0..self.dual.regions.len() {
+            let region = &self.dual.regions[region_id];
+
+            for label in [0, 1, 2, 3, 4, 5] {
+                let faces = region
+                    .faces
+                    .iter()
+                    .filter(|partialface| {
+                        self.original_mesh.faces[partialface.face_id].label.unwrap() == label
+                    })
+                    .map(|partialface| average(partialface.bounding_points.iter().map(|x| x.0)));
+
+                region_to_labelcenters[region_id][label as usize] =
+                    (average(faces.clone()), faces.count());
+            }
+
+            // only look at the top 3 labels
+            region_to_labelcenters[region_id].sort_by(|a, b| b.1.cmp(&a.1));
         }
 
         // Each region is part of 3 connected components (corresponding to X, Y, and Z), these components set a target for the region
@@ -208,20 +223,39 @@ impl Primalization {
             // Get all connected components after removing the edges
             let components = graph.connected_components();
 
-            println!("{:?}", components);
-
             // Find average coordinate for the regions inside 1 component (for `dir` coordinate component, so 1 value, not a 3-d position)
+            // for component in components {
+            //     let average_point = average(
+            //         component
+            //             .iter()
+            //             .map(|&region_id| &region_to_candidates[region_id])
+            //             .flatten()
+            //             .map(|candidate| {
+            //                 vec![candidate.position[filtered_direction as usize]; candidate.weight]
+            //             })
+            //             .flatten(),
+            //     );
+            //     for region_id in component {
+            //         region_to_target[region_id][filtered_direction as usize] = average_point;
+            //     }
+            // }
+
             for component in components {
-                let average_point = average(
-                    component
-                        .iter()
-                        .map(|&region_id| &region_to_candidates[region_id])
-                        .flatten()
-                        .map(|candidate| {
-                            vec![candidate.position[filtered_direction as usize]; candidate.weight]
-                        })
-                        .flatten(),
-                );
+                let average_point = average(component.iter().map(|&region_id| {
+                    let all_faces_count = region_to_labelcenters[region_id][0].1
+                        + region_to_labelcenters[region_id][1].1
+                        + region_to_labelcenters[region_id][2].1;
+
+                    let pos = (region_to_labelcenters[region_id][0].1 as f32
+                        / all_faces_count as f32)
+                        * region_to_labelcenters[region_id][0].0
+                        + (region_to_labelcenters[region_id][1].1 as f32 / all_faces_count as f32)
+                            * region_to_labelcenters[region_id][1].0
+                        + (region_to_labelcenters[region_id][2].1 as f32 / all_faces_count as f32)
+                            * region_to_labelcenters[region_id][2].0;
+
+                    pos[filtered_direction as usize]
+                }));
                 for region_id in component {
                     region_to_target[region_id][filtered_direction as usize] = average_point;
                 }
@@ -230,13 +264,33 @@ impl Primalization {
 
         // Find the best candidate for each region, based on minimizing distance to the set target per region
         for region_id in 0..self.dual.regions.len() {
+            let all_faces_count = region_to_labelcenters[region_id][0].1
+                + region_to_labelcenters[region_id][1].1
+                + region_to_labelcenters[region_id][2].1;
+
             self.region_to_primal[region_id] = Some(
                 region_to_candidates[region_id]
                     .iter()
                     .map(|candidate| {
                         (
                             candidate,
-                            candidate.position.distance(region_to_target[region_id]),
+                            candidate.position.distance(region_to_target[region_id]) * 0.5
+                                + 0.5
+                                    * ((region_to_labelcenters[region_id][0].1 as f32
+                                        / all_faces_count as f32)
+                                        * region_to_labelcenters[region_id][0]
+                                            .0
+                                            .distance(candidate.position)
+                                        + (region_to_labelcenters[region_id][1].1 as f32
+                                            / all_faces_count as f32)
+                                            * region_to_labelcenters[region_id][1]
+                                                .0
+                                                .distance(candidate.position)
+                                        + (region_to_labelcenters[region_id][2].1 as f32
+                                            / all_faces_count as f32)
+                                            * region_to_labelcenters[region_id][2]
+                                                .0
+                                                .distance(candidate.position)),
                         )
                     })
                     .min_by(|(_, c1_dist), (_, c2_dist)| c1_dist.total_cmp(&c2_dist))
@@ -443,66 +497,16 @@ impl Primalization {
                 }
 
                 // if we reach this point, the point is not on an edge or inside a face
-                panic!();
+                return false;
             }
         }
 
-        // // granulate the faces further
-        // for _ in 0..2 {
-        //     for &splitted_face in face_to_regions.keys() {
-        //         for face_id in self.face_to_splitted[splitted_face].clone() {
-        //             let chosen_edge = self
-        //                 .granulated_mesh
-        //                 .get_edges_of_face(face_id)
-        //                 .iter()
-        //                 .map(|&edge_id| (edge_id, self.granulated_mesh.get_length_of_edge(edge_id)))
-        //                 .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-        //                 .unwrap()
-        //                 .0;
-
-        //             let (this_face, or_that_face) =
-        //                 self.granulated_mesh.get_faces_of_edge(chosen_edge);
-
-        //             if self.splitface_to_originalface[&this_face]
-        //                 != self.splitface_to_originalface[&or_that_face]
-        //             {
-        //                 continue;
-        //             }
-
-        //             let (_, (f_0, f_1, f_2, f_3)) =
-        //                 self.granulated_mesh.split_edge(chosen_edge, None);
-
-        //             let root_face = self.splitface_to_originalface[&face_id];
-        //             self.splitface_to_originalface.insert(f_0, root_face);
-        //             self.splitface_to_originalface.insert(f_1, root_face);
-        //             self.splitface_to_originalface.insert(f_2, root_face);
-        //             self.splitface_to_originalface.insert(f_3, root_face);
-
-        //             self.face_to_splitted[root_face].push(f_0);
-        //             self.face_to_splitted[root_face].push(f_1);
-        //             self.face_to_splitted[root_face].push(f_2);
-        //             self.face_to_splitted[root_face].push(f_3);
-        //         }
-
-        //         for face_id in self.face_to_splitted[splitted_face].clone() {
-        //             let (_, (f_0, f_1, f_2)) = self.granulated_mesh.split_face(face_id, None);
-
-        //             let root_face = self.splitface_to_originalface[&face_id];
-        //             self.splitface_to_originalface.insert(f_0, root_face);
-        //             self.splitface_to_originalface.insert(f_1, root_face);
-        //             self.splitface_to_originalface.insert(f_2, root_face);
-
-        //             self.face_to_splitted[root_face].push(f_0);
-        //             self.face_to_splitted[root_face].push(f_1);
-        //             self.face_to_splitted[root_face].push(f_2);
-        //         }
-        //     }
-        // }
-
         self.polycube_graph = MeshResource::polycubify(&self.patch_graph);
+
+        return true;
     }
 
-    pub fn connect_primals(&mut self, configuration: &Configuration) {
+    pub fn connect_primals(&mut self, configuration: &mut Configuration) -> bool {
         let mut debug_lines = vec![];
         let mut primal_vertex_ids = vec![];
         let mut region_pairs = vec![];
@@ -536,12 +540,17 @@ impl Primalization {
                     continue;
                 }
             }
-            panic!();
+            println!("Failed to connect primal vertices [1]");
+            return false;
         }
 
         region_pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-        'outer: loop {
+        'outer: for iterations in 0..10 {
+            if iterations == 9 {
+                println!("Failed to connect primal vertices [iterations]");
+                return false;
+            }
             self.edge_to_paths = vec![None; self.patch_graph.edges.len()];
 
             // Find path for each pair
@@ -628,9 +637,6 @@ impl Primalization {
 
                 let (region_u, region_v) = self.patch_graph.get_endpoints_of_edge(original_edge_id);
 
-                println!("edge {}/{}", pair_id, region_pairs.len());
-                println!("region_u {}   region_v {}", region_u, region_v);
-
                 let mut remove_vertices = HashSet::new();
                 let mut remove_edges = HashSet::new();
 
@@ -665,42 +671,40 @@ impl Primalization {
 
                 // Block all vertices that are not in the current region
                 // Basically just keep everything in the current regions
-                let mut faces_to_keep = HashSet::new();
-                for face_id in self.dual.regions[region_u]
-                    .faces
-                    .iter()
-                    .chain(self.dual.regions[region_v].faces.iter())
-                    .map(|subface| subface.face_id)
-                {
-                    faces_to_keep.insert(face_id);
+                // let mut faces_to_keep = HashSet::new();
+                // for face_id in self.dual.regions[region_u]
+                //     .faces
+                //     .iter()
+                //     .chain(self.dual.regions[region_v].faces.iter())
+                //     .map(|subface| subface.face_id)
+                // {
+                //     faces_to_keep.insert(face_id);
 
-                    self.face_to_splitted[face_id]
-                        .iter()
-                        .for_each(|&splitface_id| {
-                            faces_to_keep.insert(splitface_id);
-                        });
-                }
+                //     self.face_to_splitted[face_id]
+                //         .iter()
+                //         .for_each(|&splitface_id| {
+                //             faces_to_keep.insert(splitface_id);
+                //         });
+                // }
 
-                let mut vertices_to_keep = HashSet::new();
-                for &face_id in &faces_to_keep {
-                    for vertex_id in self.granulated_mesh.get_vertices_of_face(face_id) {
-                        vertices_to_keep.insert(vertex_id);
-                    }
-                }
+                // let mut vertices_to_keep = HashSet::new();
+                // for &face_id in &faces_to_keep {
+                //     for vertex_id in self.granulated_mesh.get_vertices_of_face(face_id) {
+                //         vertices_to_keep.insert(vertex_id);
+                //     }
+                // }
 
-                for face_id in 0..self.granulated_mesh.faces.len() {
-                    if !faces_to_keep.contains(&face_id) {
-                        remove_vertices.insert(self.granulated_mesh.vertices.len() + face_id);
+                // for face_id in 0..self.granulated_mesh.faces.len() {
+                //     if !faces_to_keep.contains(&face_id) {
+                //         remove_vertices.insert(self.granulated_mesh.vertices.len() + face_id);
 
-                        for vertex_id in self.granulated_mesh.get_vertices_of_face(face_id) {
-                            // if !vertices_to_keep.contains(&vertex_id) {
-                            remove_vertices.insert(vertex_id);
-                            // }
-                        }
-                    }
-                }
-
-                println!("filtered the vertices and faces");
+                //         for vertex_id in self.granulated_mesh.get_vertices_of_face(face_id) {
+                //             // if !vertices_to_keep.contains(&vertex_id) {
+                //             remove_vertices.insert(vertex_id);
+                //             // }
+                //         }
+                //     }
+                // }
 
                 // Actually find the path
                 if let PrimalVertexType::Vertex(primal_u) =
@@ -709,7 +713,6 @@ impl Primalization {
                     if let PrimalVertexType::Vertex(primal_v) =
                         self.region_to_primal[region_v].clone().unwrap().vertex_type
                     {
-                        println!("start removing");
                         remove_vertices.remove(&primal_u);
                         remove_vertices.remove(&primal_v);
 
@@ -743,14 +746,6 @@ impl Primalization {
                             .intersection_graph
                             .get_endpoints_of_edge(edge_between_regions);
 
-                        println!(
-                            "intersection_a {}   intersection_b {}  ordering_a {:?}  ordering_b {:?}",
-                            intersection_a,
-                            intersection_b,
-                            self.dual.intersection_graph.vertices[intersection_a].ordering,
-                            self.dual.intersection_graph.vertices[intersection_b].ordering,
-                        );
-
                         let intersection_a_labels = self.dual.intersection_graph.vertices
                             [intersection_a]
                             .ordering
@@ -783,16 +778,15 @@ impl Primalization {
                         let target_labels = (intersection_a_direction, intersection_b_direction);
 
                         ggg.precompute_label_weights(
+                            &configuration,
                             target_labels,
                             face_labels.clone(),
                             edge_labels.clone(),
                         );
 
-                        println!("done removing");
+                        configuration.last_primal_w_graph = ggg.clone();
 
                         if let Some(path) = ggg.shortest_path(primal_u, primal_v) {
-                            println!("found path..");
-
                             let mut realized_path = vec![];
 
                             let mut last_face: Option<(usize, usize, usize)> = None;
@@ -893,7 +887,6 @@ impl Primalization {
                             // IF IT FAILS, MOVE EDGE TO FRONT OF PRIORITY
                             let item = region_pairs.remove(pair_id);
                             region_pairs.insert(0, item);
-                            println!("no path found ERROR ");
                             continue 'outer;
                         }
                     }
@@ -919,7 +912,7 @@ impl Primalization {
         }
 
         // find patches
-
+        // and compute a score for each patch
         for patch_id in 0..self.patch_graph.faces.len() {
             let boundary_edges = self.patch_graph.get_edges_of_face(patch_id);
 
@@ -1016,185 +1009,197 @@ impl Primalization {
                 degree: 0,
             };
 
-            println!("patch_id {patch_id}");
-
-            // compute avg normal of the surface
-            let avg_normal = compute_average_normal(&surface, &self.granulated_mesh);
-
-            // direction is negative or positive based on angle with average normal
-            let positive = dir.unwrap().to_vector().dot(avg_normal).signum();
-            let direction = dir.unwrap().to_vector() * positive;
-
-            let mut areas = vec![];
-            let mut flatness_devs = vec![];
-            let mut alignment_devs = vec![];
-            for subface in &surface.faces {
-                let flatness_dev =
-                    compute_deviation(subface.face_id, &self.granulated_mesh, avg_normal);
-                flatness_devs.push(flatness_dev);
-
-                let alignment_dev =
-                    compute_deviation(subface.face_id, &self.granulated_mesh, direction);
-                alignment_devs.push(alignment_dev);
-
-                let area = self.granulated_mesh.get_area_of_face(subface.face_id);
-                areas.push(area);
-            }
-
-            let max_flatness_dev = flatness_devs
-                .iter()
-                .cloned()
-                .fold(f32::NEG_INFINITY, f32::max);
-            let min_flatness_dev = flatness_devs.iter().cloned().fold(f32::INFINITY, f32::min);
-            let avg_flatness_dev = flatness_devs.iter().sum::<f32>() / flatness_devs.len() as f32;
-            let avg_flatness_dev_scaled = flatness_devs
-                .iter()
-                .zip(areas.iter())
-                .map(|(dev, area)| dev * area)
-                .sum::<f32>()
-                / areas.iter().sum::<f32>();
-
-            println!("FLATNESS: max_dev {max_flatness_dev}, min_dev {min_flatness_dev}, avg_dev {avg_flatness_dev}, avg_dev_scaled {avg_flatness_dev_scaled}");
-
-            let max_alignment_dev = alignment_devs
-                .iter()
-                .cloned()
-                .fold(f32::NEG_INFINITY, f32::max);
-            let min_alignment_dev = alignment_devs.iter().cloned().fold(f32::INFINITY, f32::min);
-            let avg_alignment_dev =
-                alignment_devs.iter().sum::<f32>() / alignment_devs.len() as f32;
-            let avg_alignment_dev_scaled = alignment_devs
-                .iter()
-                .zip(areas.iter())
-                .map(|(dev, area)| dev * area)
-                .sum::<f32>()
-                / areas.iter().sum::<f32>();
-
-            println!("ALIGNMENT: max_dev {max_alignment_dev}, min_dev {min_alignment_dev}, avg_dev {avg_alignment_dev}, avg_dev_scaled {avg_alignment_dev_scaled}");
-
-            // compute Jacobian of the patch
-            let corners = self.patch_graph.get_vertices_of_face(patch_id);
-            let corner_positions = corners
-                .iter()
-                .map(|&vertex_id| self.patch_graph.vertices[vertex_id].position)
-                .collect_vec();
-            assert!(corners.len() == 4);
-
-            println!("corner_positions: {corner_positions:?}");
-
-            let quad = match (surface.direction, positive < 0.) {
-                (Some(PrincipalDirection::X), false) => {
-                    let mut m = Matrix4x2::zeros();
-                    m[(0, 0)] = corner_positions[3].y;
-                    m[(0, 1)] = corner_positions[3].z;
-                    m[(1, 0)] = corner_positions[2].y;
-                    m[(1, 1)] = corner_positions[2].z;
-                    m[(2, 0)] = corner_positions[1].y;
-                    m[(2, 1)] = corner_positions[1].z;
-                    m[(3, 0)] = corner_positions[0].y;
-                    m[(3, 1)] = corner_positions[0].z;
-                    m
-                }
-                (Some(PrincipalDirection::Y), true) => {
-                    let mut m = Matrix4x2::zeros();
-                    m[(0, 0)] = corner_positions[3].x;
-                    m[(0, 1)] = corner_positions[3].z;
-                    m[(1, 0)] = corner_positions[2].x;
-                    m[(1, 1)] = corner_positions[2].z;
-                    m[(2, 0)] = corner_positions[1].x;
-                    m[(2, 1)] = corner_positions[1].z;
-                    m[(3, 0)] = corner_positions[0].x;
-                    m[(3, 1)] = corner_positions[0].z;
-                    m
-                }
-                (Some(PrincipalDirection::Z), false) => {
-                    let mut m = Matrix4x2::zeros();
-                    m[(0, 0)] = corner_positions[3].x;
-                    m[(0, 1)] = corner_positions[3].y;
-                    m[(1, 0)] = corner_positions[2].x;
-                    m[(1, 1)] = corner_positions[2].y;
-                    m[(2, 0)] = corner_positions[1].x;
-                    m[(2, 1)] = corner_positions[1].y;
-                    m[(3, 0)] = corner_positions[0].x;
-                    m[(3, 1)] = corner_positions[0].y;
-                    m
-                }
-                (Some(PrincipalDirection::X), true) => {
-                    let mut m = Matrix4x2::zeros();
-                    m[(0, 0)] = corner_positions[0].y;
-                    m[(0, 1)] = corner_positions[0].z;
-                    m[(1, 0)] = corner_positions[1].y;
-                    m[(1, 1)] = corner_positions[1].z;
-                    m[(2, 0)] = corner_positions[2].y;
-                    m[(2, 1)] = corner_positions[2].z;
-                    m[(3, 0)] = corner_positions[3].y;
-                    m[(3, 1)] = corner_positions[3].z;
-                    m
-                }
-                (Some(PrincipalDirection::Y), false) => {
-                    let mut m = Matrix4x2::zeros();
-                    m[(0, 0)] = corner_positions[0].x;
-                    m[(0, 1)] = corner_positions[0].z;
-                    m[(1, 0)] = corner_positions[1].x;
-                    m[(1, 1)] = corner_positions[1].z;
-                    m[(2, 0)] = corner_positions[2].x;
-                    m[(2, 1)] = corner_positions[2].z;
-                    m[(3, 0)] = corner_positions[3].x;
-                    m[(3, 1)] = corner_positions[3].z;
-                    m
-                }
-                (Some(PrincipalDirection::Z), true) => {
-                    let mut m = Matrix4x2::zeros();
-                    m[(0, 0)] = corner_positions[0].x;
-                    m[(0, 1)] = corner_positions[0].y;
-                    m[(1, 0)] = corner_positions[1].x;
-                    m[(1, 1)] = corner_positions[1].y;
-                    m[(2, 0)] = corner_positions[2].x;
-                    m[(2, 1)] = corner_positions[2].y;
-                    m[(3, 0)] = corner_positions[3].x;
-                    m[(3, 1)] = corner_positions[3].y;
-                    m
-                }
-                _ => Matrix4x2::from_vec(
-                    corner_positions
-                        .iter()
-                        .map(|&pos| vec![0., 0.])
-                        .flatten()
-                        .collect(),
-                ),
-            };
-
-            println!("quad: {quad}");
-
-            for (i, n, z) in [(0, -1., -1.), (1, 1., -1.), (2, 1., 1.), (3, -1., 1.)] {
-                // get distance (length) between p1 and p2
-                let length1 = Vec2::from([quad.row(i)[0], quad.row(i)[1]]).distance(Vec2::from([
-                    quad.row((i - 1) % 4)[0],
-                    quad.row((i - 1) % 4)[1],
-                ]));
-
-                // get distance (length) between p2 and p3
-                let length2 = Vec2::from([quad.row(i)[0], quad.row(i)[1]]).distance(Vec2::from([
-                    quad.row((i + 1) % 4)[0],
-                    quad.row((i + 1) % 4)[1],
-                ]));
-
-                let jacobian = jacobian(n, z, &quad);
-                let det_jacobian = det_jacobian(n, z, &quad);
-                let scaled_det_jacobian = det_jacobian / ((length1 / 2.) * (length2 / 2.));
-
-                println!("jacobian: {jacobian}");
-                println!("det_jacobian: {det_jacobian}");
-                println!("scaled det_jacobian: {scaled_det_jacobian}");
-
-                println!("---\n\n");
-            }
-
-            println!("---\n\n");
-
             self.patch_to_surface[patch_id] = Some(surface);
         }
+
+        true
     }
+}
+
+pub fn evaluate(primalization: &Primalization) -> Option<f32> {
+    let mut worst_patch_scores = vec![];
+    let mut avg_patch_scores = vec![];
+
+    for patch_id in 0..primalization.patch_graph.faces.len() {
+        let surface = primalization.patch_to_surface[patch_id].clone().unwrap();
+        let dir = surface.direction;
+
+        // compute avg normal of the surface
+        let avg_normal = compute_average_normal(&surface, &primalization.granulated_mesh);
+
+        // direction is negative or positive based on angle with average normal
+        let positive = dir.unwrap().to_vector().dot(avg_normal).signum();
+        let direction = dir.unwrap().to_vector() * positive;
+
+        let mut areas = vec![];
+        let mut flatness_devs = vec![];
+        let mut alignment_devs = vec![];
+        for subface in &surface.faces {
+            let flatness_dev =
+                compute_deviation(subface.face_id, &primalization.granulated_mesh, avg_normal);
+            flatness_devs.push(flatness_dev);
+
+            let alignment_dev =
+                compute_deviation(subface.face_id, &primalization.granulated_mesh, direction);
+            alignment_devs.push(alignment_dev);
+
+            let area = primalization
+                .granulated_mesh
+                .get_area_of_face(subface.face_id);
+            areas.push(area);
+        }
+
+        let max_flatness_dev = flatness_devs
+            .iter()
+            .cloned()
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_flatness_dev = flatness_devs.iter().cloned().fold(f32::INFINITY, f32::min);
+        let avg_flatness_dev = flatness_devs.iter().sum::<f32>() / flatness_devs.len() as f32;
+        let avg_flatness_dev_scaled = flatness_devs
+            .iter()
+            .zip(areas.iter())
+            .map(|(dev, area)| dev * area)
+            .sum::<f32>()
+            / areas.iter().sum::<f32>();
+
+        let max_alignment_dev = alignment_devs
+            .iter()
+            .cloned()
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_alignment_dev = alignment_devs.iter().cloned().fold(f32::INFINITY, f32::min);
+        let avg_alignment_dev = alignment_devs.iter().sum::<f32>() / alignment_devs.len() as f32;
+        let avg_alignment_dev_scaled = alignment_devs
+            .iter()
+            .zip(areas.iter())
+            .map(|(dev, area)| dev * area)
+            .sum::<f32>()
+            / areas.iter().sum::<f32>();
+
+        // compute Jacobian of the patch
+        let corners = primalization.patch_graph.get_vertices_of_face(patch_id);
+        let corner_positions = corners
+            .iter()
+            .map(|&vertex_id| primalization.patch_graph.vertices[vertex_id].position)
+            .collect_vec();
+        assert!(corners.len() == 4);
+
+        let quad = match (surface.direction, positive < 0.) {
+            (Some(PrincipalDirection::X), false) => {
+                let mut m = Matrix4x2::zeros();
+                m[(0, 0)] = corner_positions[3].y;
+                m[(0, 1)] = corner_positions[3].z;
+                m[(1, 0)] = corner_positions[2].y;
+                m[(1, 1)] = corner_positions[2].z;
+                m[(2, 0)] = corner_positions[1].y;
+                m[(2, 1)] = corner_positions[1].z;
+                m[(3, 0)] = corner_positions[0].y;
+                m[(3, 1)] = corner_positions[0].z;
+                m
+            }
+            (Some(PrincipalDirection::Y), true) => {
+                let mut m = Matrix4x2::zeros();
+                m[(0, 0)] = corner_positions[3].x;
+                m[(0, 1)] = corner_positions[3].z;
+                m[(1, 0)] = corner_positions[2].x;
+                m[(1, 1)] = corner_positions[2].z;
+                m[(2, 0)] = corner_positions[1].x;
+                m[(2, 1)] = corner_positions[1].z;
+                m[(3, 0)] = corner_positions[0].x;
+                m[(3, 1)] = corner_positions[0].z;
+                m
+            }
+            (Some(PrincipalDirection::Z), false) => {
+                let mut m = Matrix4x2::zeros();
+                m[(0, 0)] = corner_positions[3].x;
+                m[(0, 1)] = corner_positions[3].y;
+                m[(1, 0)] = corner_positions[2].x;
+                m[(1, 1)] = corner_positions[2].y;
+                m[(2, 0)] = corner_positions[1].x;
+                m[(2, 1)] = corner_positions[1].y;
+                m[(3, 0)] = corner_positions[0].x;
+                m[(3, 1)] = corner_positions[0].y;
+                m
+            }
+            (Some(PrincipalDirection::X), true) => {
+                let mut m = Matrix4x2::zeros();
+                m[(0, 0)] = corner_positions[0].y;
+                m[(0, 1)] = corner_positions[0].z;
+                m[(1, 0)] = corner_positions[1].y;
+                m[(1, 1)] = corner_positions[1].z;
+                m[(2, 0)] = corner_positions[2].y;
+                m[(2, 1)] = corner_positions[2].z;
+                m[(3, 0)] = corner_positions[3].y;
+                m[(3, 1)] = corner_positions[3].z;
+                m
+            }
+            (Some(PrincipalDirection::Y), false) => {
+                let mut m = Matrix4x2::zeros();
+                m[(0, 0)] = corner_positions[0].x;
+                m[(0, 1)] = corner_positions[0].z;
+                m[(1, 0)] = corner_positions[1].x;
+                m[(1, 1)] = corner_positions[1].z;
+                m[(2, 0)] = corner_positions[2].x;
+                m[(2, 1)] = corner_positions[2].z;
+                m[(3, 0)] = corner_positions[3].x;
+                m[(3, 1)] = corner_positions[3].z;
+                m
+            }
+            (Some(PrincipalDirection::Z), true) => {
+                let mut m = Matrix4x2::zeros();
+                m[(0, 0)] = corner_positions[0].x;
+                m[(0, 1)] = corner_positions[0].y;
+                m[(1, 0)] = corner_positions[1].x;
+                m[(1, 1)] = corner_positions[1].y;
+                m[(2, 0)] = corner_positions[2].x;
+                m[(2, 1)] = corner_positions[2].y;
+                m[(3, 0)] = corner_positions[3].x;
+                m[(3, 1)] = corner_positions[3].y;
+                m
+            }
+            _ => Matrix4x2::from_vec(
+                corner_positions
+                    .iter()
+                    .map(|&pos| vec![0., 0.])
+                    .flatten()
+                    .collect(),
+            ),
+        };
+
+        for (i, n, z) in [(0, -1., -1.), (1, 1., -1.), (2, 1., 1.), (3, -1., 1.)] {
+            // get distance (length) between p1 and p2
+            let length1 = Vec2::from([quad.row(i)[0], quad.row(i)[1]]).distance(Vec2::from([
+                quad.row((i - 1) % 4)[0],
+                quad.row((i - 1) % 4)[1],
+            ]));
+
+            // get distance (length) between p2 and p3
+            let length2 = Vec2::from([quad.row(i)[0], quad.row(i)[1]]).distance(Vec2::from([
+                quad.row((i + 1) % 4)[0],
+                quad.row((i + 1) % 4)[1],
+            ]));
+
+            let jacobian = jacobian(n, z, &quad);
+            let det_jacobian = det_jacobian(n, z, &quad);
+            let scaled_det_jacobian = det_jacobian / ((length1 / 2.) * (length2 / 2.));
+        }
+
+        worst_patch_scores.push(max_alignment_dev);
+        avg_patch_scores.push(avg_alignment_dev_scaled);
+    }
+
+    let score = worst_patch_scores
+        .into_iter()
+        .max_by(|a, b| a.total_cmp(b))
+        .unwrap()
+        * 0.2
+        + utils::average(avg_patch_scores.into_iter());
+
+    if score.is_nan() {
+        println!("Failed to connect primal vertices [score]");
+        return None;
+    }
+
+    return Some(score);
 }
 
 // Derivatives of shape functions with respect to xi and eta
@@ -1232,11 +1237,6 @@ pub fn compute_average_normal(surface: &Surface, mesh: &Doconeli) -> Vec3 {
         normal += mesh.get_normal_of_face(subface.face_id) * area;
     }
 
-    println!("total area {}", total_area);
-    println!("normal (scaled) {}", normal / total_area);
-    println!("normal (normalized1) {}", normal.normalize());
-    println!("normal (normalized2) {}", (normal / total_area).normalize());
-
     normal / total_area
 }
 
@@ -1254,13 +1254,6 @@ pub fn compute_average_deviation(surface: &Surface, mesh: &Doconeli, vector: Vec
         total_area += area;
         deviation += compute_deviation(subface.face_id, mesh, vector) * area;
     }
-
-    println!("total area {}", total_area);
-    println!("deviation {}", deviation);
-    println!(
-        "deviation / total area {}",
-        (deviation / total_area) / std::f32::consts::PI
-    );
 
     deviation / total_area
 }
@@ -1287,20 +1280,6 @@ impl Solution {
         for edge_id in 0..self.paths_passing_per_edge.len() {
             self.paths_passing_per_edge[edge_id]
                 .sort_by_key(|&(path_id, io)| OrderedFloat(io * self.paths[path_id].order_token));
-        }
-    }
-
-    pub fn shuffle_paths(&mut self) {
-        for i in 0..self.paths.len() {
-            self.paths[i].order_token = rand::thread_rng().gen_range(0.0..1.0);
-        }
-    }
-
-    pub fn shuffle_paths_of_dir(&mut self, dir: PrincipalDirection) {
-        for i in 0..self.paths.len() {
-            if self.paths[i].direction == dir {
-                self.paths[i].order_token = rand::thread_rng().gen_range(0.0..1.0);
-            }
         }
     }
 
@@ -1491,8 +1470,11 @@ impl MeshResource {
             .collect_vec()
     }
 
-    pub fn remove_path(&mut self, path_id: usize) {
+    pub fn remove_path(&mut self, path_id: usize, configuration: &mut Configuration) -> bool {
         let mut new_sol = self.sol.clone();
+
+        let singularities =
+            self.get_top_n_percent_singularities(configuration.percent_singularities);
 
         let normalized_path_id = path_id % new_sol.paths.len();
 
@@ -1512,8 +1494,15 @@ impl MeshResource {
 
         new_sol.pre_process();
 
-        if let Some(ok_sol) = self.verify_sol(&new_sol) {
+        self.sol.regions =
+            self.get_subsurfaces(&self.sol, &self.sol.intersection_graph, ColorType::Random);
+
+        if let Some((ok_sol, ok_primal)) = self.verify_sol(&new_sol, configuration) {
             self.sol = ok_sol;
+            self.primalization = ok_primal;
+            return true;
+        } else {
+            return false;
         }
     }
 
@@ -1610,19 +1599,6 @@ impl MeshResource {
             intersection_graph: Doconeli::empty(),
             ..default()
         };
-
-        info!("Initialization");
-
-        configuration.algorithm_samples = 2000;
-        configuration.choose_direction = PrincipalDirection::X;
-        self.sol = self.add_loop(configuration).unwrap();
-        configuration.choose_direction = PrincipalDirection::Y;
-        self.sol = self.add_loop(configuration).unwrap();
-        configuration.choose_direction = PrincipalDirection::Z;
-        self.sol = self.add_loop(configuration).unwrap();
-
-        self.sol.regions =
-            self.get_subsurfaces(&self.sol, &self.sol.intersection_graph, ColorType::Random);
     }
 
     pub fn polycubify(connectivity_graph: &Doconeli) -> Doconeli {
@@ -1647,8 +1623,6 @@ impl MeshResource {
 
             // Get all connected components after removing the edges
             let components = graph.connected_components();
-
-            println!("{:?}", components);
 
             // Find average coordinate for the corners inside 1 component (for `dir` coordinate component, so 1 value, not a 3-d position)
             for component in components {
@@ -1894,7 +1868,7 @@ impl MeshResource {
         return components;
     }
 
-    pub fn add_loop(&self, configuration: &mut Configuration) -> Option<Solution> {
+    pub fn add_loop(&self, configuration: &mut Configuration) -> Option<(Solution, Primalization)> {
         let principal_direction = configuration.choose_direction;
 
         let mut timer = Timer::new();
@@ -2111,332 +2085,322 @@ impl MeshResource {
 
         let mut new_sol = self.sol.clone();
         // Go through candidate loops in the ordering of best score
-        while let Some((score, (candidate_id, candidate_loop))) = candidate_loops.pop() {
+        'outer: while let Some((score, (candidate_id, candidate_loop))) = candidate_loops.pop() {
             timer.reset();
             timer.report(&format!(
                 "Verifying candidate loop {candidate_id} with score {score}"
             ));
 
-            'outer: for _ in 0..5 {
-                // Start a new solution, with the candidate path added.
-                new_sol = self.sol.clone();
+            // Start a new solution, with the candidate path added.
+            new_sol = self.sol.clone();
 
-                let this_loop_id = new_sol.add_path(
-                    &candidate_loop,
-                    principal_direction,
-                    rand::thread_rng().gen_range(0.0..1.0),
-                    true,
-                );
+            let this_loop_id = new_sol.add_path(
+                &candidate_loop,
+                principal_direction,
+                rand::thread_rng().gen_range(0.0..1.0),
+                true,
+            );
 
-                // Validate intersection patterns
-                // Get the intersection patterns
-                let intersection_patterns =
-                    new_sol
-                        .paths
-                        .par_iter()
-                        .enumerate()
-                        .map(|(other_loop_id, other_loop)| {
-                            let number_of_intersections = new_sol
-                                .get_common_faces(&self.mesh, this_loop_id, other_loop_id)
-                                .into_iter()
-                                .filter(|&face_id| {
-                                    new_sol.intersection_in_face(
-                                        &self.mesh,
-                                        this_loop_id,
-                                        other_loop_id,
-                                        face_id,
-                                    )
-                                })
-                                .count();
+            // Validate intersection patterns
+            // Get the intersection patterns
+            let intersection_patterns =
+                new_sol
+                    .paths
+                    .par_iter()
+                    .enumerate()
+                    .map(|(other_loop_id, other_loop)| {
+                        let number_of_intersections = new_sol
+                            .get_common_faces(&self.mesh, this_loop_id, other_loop_id)
+                            .into_iter()
+                            .filter(|&face_id| {
+                                new_sol.intersection_in_face(
+                                    &self.mesh,
+                                    this_loop_id,
+                                    other_loop_id,
+                                    face_id,
+                                )
+                            })
+                            .count();
 
-                            (other_loop.direction, number_of_intersections)
-                        });
+                        (other_loop.direction, number_of_intersections)
+                    });
 
-                // ACTUALY USE CONFIG FOR RULES...
-                if !intersection_patterns
+            // ACTUALY USE CONFIG FOR RULES...
+            if !intersection_patterns
+                .clone()
+                .all(|(dir, nrx)| nrx == 0 || (nrx == 2 && principal_direction != dir))
+            {
+                timer.report(&format!("❌  Detected invalid intersections"));
+                continue 'outer;
+            }
+
+            if new_sol.paths.len() >= 3 {
+                let intersects_x = intersection_patterns
                     .clone()
-                    .all(|(dir, nrx)| nrx == 0 || (nrx == 2 && principal_direction != dir))
-                {
-                    timer.report(&format!("❌  Detected invalid intersections"));
+                    .any(|(dir, nrx)| nrx > 0 && dir == PrincipalDirection::X)
+                    || principal_direction == PrincipalDirection::X;
+                let intersects_y = intersection_patterns
+                    .clone()
+                    .any(|(dir, nrx)| nrx > 0 && dir == PrincipalDirection::Y)
+                    || principal_direction == PrincipalDirection::Y;
+                let intersects_z = intersection_patterns
+                    .clone()
+                    .any(|(dir, nrx)| nrx > 0 && dir == PrincipalDirection::Z)
+                    || principal_direction == PrincipalDirection::Z;
+                if !(intersects_x && intersects_y && intersects_z) {
+                    timer.report(&format!("❌  Detected invalid intersections (must intersect atleast one loop of other two labels (X: {intersects_x}, Y: {intersects_y}, Z: {intersects_z})"));
                     continue 'outer;
                 }
+            }
 
-                if new_sol.paths.len() >= 3 {
-                    let intersects_x = intersection_patterns
-                        .clone()
-                        .any(|(dir, nrx)| nrx > 0 && dir == PrincipalDirection::X)
-                        || principal_direction == PrincipalDirection::X;
-                    let intersects_y = intersection_patterns
-                        .clone()
-                        .any(|(dir, nrx)| nrx > 0 && dir == PrincipalDirection::Y)
-                        || principal_direction == PrincipalDirection::Y;
-                    let intersects_z = intersection_patterns
-                        .clone()
-                        .any(|(dir, nrx)| nrx > 0 && dir == PrincipalDirection::Z)
-                        || principal_direction == PrincipalDirection::Z;
-                    if !(intersects_x && intersects_y && intersects_z) {
-                        timer.report(&format!("❌  Detected invalid intersections (must intersect atleast one loop of other two labels (X: {intersects_x}, Y: {intersects_y}, Z: {intersects_z})"));
-                        continue 'outer;
-                    }
+            timer.report(&format!("🆗  Loop passed intersections checks"));
+            timer.reset();
+
+            let mut prim = Primalization::initialize(&self.mesh.clone(), &new_sol).unwrap();
+            let singularities =
+                self.get_top_n_percent_singularities(configuration.percent_singularities);
+
+            // ACTUALY USE CONFIG FOR RULES...
+            if new_sol.paths.len() >= 3 {
+                let mut intersections: Vec<Vertex> = vec![];
+                let mut loop_to_intersections = HashMap::new();
+
+                let mut intersection_connections = vec![];
+
+                for loop_id in 0..(new_sol.paths.len()) {
+                    loop_to_intersections.insert(loop_id, vec![]);
                 }
 
-                timer.report(&format!("🆗  Loop passed intersections checks"));
-                timer.reset();
+                for loop_i_id in 0..(new_sol.paths.len() - 1) {
+                    for loop_j_id in (loop_i_id + 1)..new_sol.paths.len() {
+                        let common_faces =
+                            new_sol.get_common_faces(&self.mesh, loop_i_id, loop_j_id);
 
-                // ACTUALY USE CONFIG FOR RULES...
-                if new_sol.paths.len() >= 3 {
-                    let mut intersections: Vec<Vertex> = vec![];
-                    let mut loop_to_intersections = HashMap::new();
+                        for common_passed_face in common_faces {
+                            // find intersection between loop_i and loop_j in common_passed_face ->
 
-                    let mut intersection_connections = vec![];
+                            // first find the endpoints of both loops inside this face
 
-                    for loop_id in 0..(new_sol.paths.len()) {
-                        loop_to_intersections.insert(loop_id, vec![]);
-                    }
+                            let common_passed_face_edges =
+                                self.mesh.get_edges_of_face(common_passed_face);
 
-                    for loop_i_id in 0..(new_sol.paths.len() - 1) {
-                        for loop_j_id in (loop_i_id + 1)..new_sol.paths.len() {
-                            let common_faces =
-                                new_sol.get_common_faces(&self.mesh, loop_i_id, loop_j_id);
+                            let segment_i = common_passed_face_edges
+                                .iter()
+                                .filter(|edge_id| new_sol.paths[loop_i_id].edges.contains(edge_id))
+                                .map(|&edge_id| {
+                                    new_sol
+                                        .get_position_of_path_in_edge(
+                                            loop_i_id, &self.mesh, edge_id,
+                                        )
+                                        .unwrap()
+                                })
+                                .collect_tuple()
+                                .unwrap();
 
-                            for common_passed_face in common_faces {
-                                // find intersection between loop_i and loop_j in common_passed_face ->
+                            let segment_j = common_passed_face_edges
+                                .iter()
+                                .filter(|edge_id| new_sol.paths[loop_j_id].edges.contains(edge_id))
+                                .map(|&edge_id| {
+                                    new_sol
+                                        .get_position_of_path_in_edge(
+                                            loop_j_id, &self.mesh, edge_id,
+                                        )
+                                        .unwrap()
+                                })
+                                .collect_tuple()
+                                .unwrap();
 
-                                // first find the endpoints of both loops inside this face
-
-                                let common_passed_face_edges =
-                                    self.mesh.get_edges_of_face(common_passed_face);
-
-                                let segment_i = common_passed_face_edges
+                            if let Some(intersection_position) = new_sol.intersection_in_face_exact(
+                                &self.mesh,
+                                segment_i,
+                                segment_j,
+                                common_passed_face,
+                            ) {
+                                if intersections
                                     .iter()
-                                    .filter(|edge_id| {
-                                        new_sol.paths[loop_i_id].edges.contains(edge_id)
+                                    .find(|&v| {
+                                        v.position.distance(intersection_position) <= 0.000001
                                     })
-                                    .map(|&edge_id| {
-                                        new_sol
-                                            .get_position_of_path_in_edge(
-                                                loop_i_id, &self.mesh, edge_id,
-                                            )
-                                            .unwrap()
-                                    })
-                                    .collect_tuple()
-                                    .unwrap();
-
-                                let segment_j = common_passed_face_edges
-                                    .iter()
-                                    .filter(|edge_id| {
-                                        new_sol.paths[loop_j_id].edges.contains(edge_id)
-                                    })
-                                    .map(|&edge_id| {
-                                        new_sol
-                                            .get_position_of_path_in_edge(
-                                                loop_j_id, &self.mesh, edge_id,
-                                            )
-                                            .unwrap()
-                                    })
-                                    .collect_tuple()
-                                    .unwrap();
-
-                                if let Some(intersection_position) = new_sol
-                                    .intersection_in_face_exact(
-                                        &self.mesh,
-                                        segment_i,
-                                        segment_j,
-                                        common_passed_face,
-                                    )
+                                    .is_some()
                                 {
-                                    if intersections
-                                        .iter()
-                                        .find(|&v| {
-                                            v.position.distance(intersection_position) <= 0.000001
-                                        })
-                                        .is_some()
-                                    {
-                                        continue 'outer;
-                                    }
-
-                                    loop_to_intersections
-                                        .entry(loop_i_id)
-                                        .or_default()
-                                        .push(intersections.len());
-
-                                    loop_to_intersections
-                                        .entry(loop_j_id)
-                                        .or_default()
-                                        .push(intersections.len());
-
-                                    let seq: Vec<(usize, usize)> = new_sol
-                                        .get_sequence_around_face(&self.mesh, common_passed_face)
-                                        .iter()
-                                        .filter(|x| x.0 == loop_i_id || x.0 == loop_j_id)
-                                        .copied()
-                                        .collect();
-
-                                    intersections.push(Vertex {
-                                        some_edge: None,
-                                        position: intersection_position,
-                                        normal: self.mesh.get_normal_of_face(common_passed_face),
-                                        original_face_id: common_passed_face,
-                                        ordering: seq,
-                                        ..default()
-                                    });
+                                    continue 'outer;
                                 }
+
+                                loop_to_intersections
+                                    .entry(loop_i_id)
+                                    .or_default()
+                                    .push(intersections.len());
+
+                                loop_to_intersections
+                                    .entry(loop_j_id)
+                                    .or_default()
+                                    .push(intersections.len());
+
+                                let seq: Vec<(usize, usize)> = new_sol
+                                    .get_sequence_around_face(&self.mesh, common_passed_face)
+                                    .iter()
+                                    .filter(|x| x.0 == loop_i_id || x.0 == loop_j_id)
+                                    .copied()
+                                    .collect();
+
+                                intersections.push(Vertex {
+                                    some_edge: None,
+                                    position: intersection_position,
+                                    normal: self.mesh.get_normal_of_face(common_passed_face),
+                                    original_face_id: common_passed_face,
+                                    ordering: seq,
+                                    ..default()
+                                });
                             }
                         }
                     }
+                }
 
-                    let mut vertexpair_to_edge = HashMap::new();
+                let mut vertexpair_to_edge = HashMap::new();
 
-                    for loop_id in 0..(new_sol.paths.len()) {
-                        let loop_intersections = loop_to_intersections.entry(loop_id).or_default();
-                        let passed_edges = new_sol.paths[loop_id].edges.clone();
+                for loop_id in 0..(new_sol.paths.len()) {
+                    let loop_intersections = loop_to_intersections.entry(loop_id).or_default();
+                    let passed_edges = new_sol.paths[loop_id].edges.clone();
 
-                        loop_intersections.sort_by(|&intersection_a, &intersection_b| {
-                            let intersection_a_face =
-                                intersections[intersection_a].original_face_id;
-                            let intersection_b_face =
-                                intersections[intersection_b].original_face_id;
-                            let mut intersection_a_edges: Vec<usize> = self
-                                .mesh
-                                .get_edges_of_face(intersection_a_face)
-                                .iter()
-                                .filter(|e| passed_edges.contains(e))
-                                .copied()
-                                .collect();
+                    loop_intersections.sort_by(|&intersection_a, &intersection_b| {
+                        let intersection_a_face = intersections[intersection_a].original_face_id;
+                        let intersection_b_face = intersections[intersection_b].original_face_id;
+                        let mut intersection_a_edges: Vec<usize> = self
+                            .mesh
+                            .get_edges_of_face(intersection_a_face)
+                            .iter()
+                            .filter(|e| passed_edges.contains(e))
+                            .copied()
+                            .collect();
 
-                            assert!(intersection_a_edges.len() == 2);
+                        assert!(intersection_a_edges.len() == 2);
 
-                            let mut intersection_b_edges: Vec<usize> = self
-                                .mesh
-                                .get_edges_of_face(intersection_b_face)
-                                .iter()
-                                .filter(|e| passed_edges.contains(e))
-                                .copied()
-                                .collect();
+                        let mut intersection_b_edges: Vec<usize> = self
+                            .mesh
+                            .get_edges_of_face(intersection_b_face)
+                            .iter()
+                            .filter(|e| passed_edges.contains(e))
+                            .copied()
+                            .collect();
 
-                            assert!(intersection_b_edges.len() == 2);
+                        assert!(intersection_b_edges.len() == 2);
 
-                            intersection_a_edges.sort_by(|a, b| {
-                                let pos_a = passed_edges.iter().position(|x| x == a).unwrap();
-                                let pos_b = passed_edges.iter().position(|x| x == b).unwrap();
-                                (&pos_a).cmp(&pos_b)
-                            });
-
-                            intersection_b_edges.sort_by(|a, b| {
-                                let pos_a = passed_edges.iter().position(|x| x == a).unwrap();
-                                let pos_b = passed_edges.iter().position(|x| x == b).unwrap();
-                                (&pos_a).cmp(&pos_b)
-                            });
-
-                            if intersection_a_face != intersection_b_face {
-                                let pos_intersection_a = passed_edges
-                                    .iter()
-                                    .position(|&x| x == intersection_a_edges[0])
-                                    .unwrap();
-                                let pos_intersection_b = passed_edges
-                                    .iter()
-                                    .position(|&x| x == intersection_b_edges[0])
-                                    .unwrap();
-
-                                (&pos_intersection_a).cmp(&pos_intersection_b)
-                            } else {
-                                assert!(intersection_a_edges[0] == intersection_b_edges[0]);
-
-                                let vector_root_edge =
-                                    self.mesh.get_vector_of_edge(intersection_a_edges[0]);
-                                let pos_root_edge = self.mesh.get_position_of_vertex(
-                                    self.mesh.get_root_of_edge(intersection_a_edges[0]),
-                                );
-
-                                let pos_intersection_a = intersections[intersection_a].position;
-                                let pos_intersection_b = intersections[intersection_b].position;
-
-                                let vector_intersection_a = pos_intersection_a - pos_root_edge;
-                                let vector_intersection_b = pos_intersection_b - pos_root_edge;
-
-                                let angle_intersection_a =
-                                    vector_root_edge.angle_between(vector_intersection_a);
-                                let angle_intersection_b =
-                                    vector_root_edge.angle_between(vector_intersection_b);
-
-                                (&angle_intersection_a)
-                                    .partial_cmp(&angle_intersection_b)
-                                    .unwrap()
-                            }
+                        intersection_a_edges.sort_by(|a, b| {
+                            let pos_a = passed_edges.iter().position(|x| x == a).unwrap();
+                            let pos_b = passed_edges.iter().position(|x| x == b).unwrap();
+                            (&pos_a).cmp(&pos_b)
                         });
 
-                        loop_intersections.push(loop_intersections[0]);
+                        intersection_b_edges.sort_by(|a, b| {
+                            let pos_a = passed_edges.iter().position(|x| x == a).unwrap();
+                            let pos_b = passed_edges.iter().position(|x| x == b).unwrap();
+                            (&pos_a).cmp(&pos_b)
+                        });
 
-                        for consecutive_intersections in loop_intersections.windows(2) {
-                            let mut loop_edges = new_sol.paths[loop_id].edges[1..].to_vec();
+                        if intersection_a_face != intersection_b_face {
+                            let pos_intersection_a = passed_edges
+                                .iter()
+                                .position(|&x| x == intersection_a_edges[0])
+                                .unwrap();
+                            let pos_intersection_b = passed_edges
+                                .iter()
+                                .position(|&x| x == intersection_b_edges[0])
+                                .unwrap();
 
-                            let intersection_a = consecutive_intersections[0];
-                            let intersection_a_face =
-                                intersections[intersection_a].original_face_id;
-                            let intersection_a_edges =
-                                self.mesh.get_edges_of_face(intersection_a_face);
+                            (&pos_intersection_a).cmp(&pos_intersection_b)
+                        } else {
+                            assert!(intersection_a_edges[0] == intersection_b_edges[0]);
 
-                            let intersection_b = consecutive_intersections[1];
-                            let intersection_b_face =
-                                intersections[intersection_b].original_face_id;
-                            let intersection_b_edges =
-                                self.mesh.get_edges_of_face(intersection_b_face);
+                            let vector_root_edge =
+                                self.mesh.get_vector_of_edge(intersection_a_edges[0]);
+                            let pos_root_edge = self.mesh.get_position_of_vertex(
+                                self.mesh.get_root_of_edge(intersection_a_edges[0]),
+                            );
 
-                            let edges_bet = if intersection_a_face == intersection_b_face {
-                                vec![]
-                            } else if self
-                                .mesh
-                                .get_neighbors_of_face_edgewise(intersection_a_face)
-                                .contains(&intersection_b_face)
-                            {
-                                let the_edge: Vec<usize> = intersection_a_edges
-                                    .iter()
-                                    .copied()
-                                    .filter(|&edge_id| {
-                                        intersection_b_edges
-                                            .contains(&self.mesh.get_twin_of_edge(edge_id))
-                                    })
-                                    .collect();
+                            let pos_intersection_a = intersections[intersection_a].position;
+                            let pos_intersection_b = intersections[intersection_b].position;
 
-                                assert!(the_edge.length() == 1);
+                            let vector_intersection_a = pos_intersection_a - pos_root_edge;
+                            let vector_intersection_b = pos_intersection_b - pos_root_edge;
 
-                                vec![the_edge[0], self.mesh.get_twin_of_edge(the_edge[0])]
-                            } else {
-                                let start_edge_positions: Vec<usize> = loop_edges
-                                    .iter()
-                                    .positions(|edge_id| intersection_a_edges.contains(edge_id))
-                                    .collect();
+                            let angle_intersection_a =
+                                vector_root_edge.angle_between(vector_intersection_a);
+                            let angle_intersection_b =
+                                vector_root_edge.angle_between(vector_intersection_b);
 
-                                assert!(start_edge_positions.len() == 2);
+                            (&angle_intersection_a)
+                                .partial_cmp(&angle_intersection_b)
+                                .unwrap()
+                        }
+                    });
 
-                                loop_edges.remove(start_edge_positions[1]);
+                    loop_intersections.push(loop_intersections[0]);
 
-                                let end_edge_positions: Vec<usize> = loop_edges
-                                    .iter()
-                                    .positions(|edge_id| intersection_b_edges.contains(edge_id))
-                                    .collect();
+                    for consecutive_intersections in loop_intersections.windows(2) {
+                        let mut loop_edges = new_sol.paths[loop_id].edges[1..].to_vec();
 
-                                assert!(end_edge_positions.len() == 2);
+                        let intersection_a = consecutive_intersections[0];
+                        let intersection_a_face = intersections[intersection_a].original_face_id;
+                        let intersection_a_edges = self.mesh.get_edges_of_face(intersection_a_face);
 
-                                loop_edges.remove(end_edge_positions[1]);
+                        let intersection_b = consecutive_intersections[1];
+                        let intersection_b_face = intersections[intersection_b].original_face_id;
+                        let intersection_b_edges = self.mesh.get_edges_of_face(intersection_b_face);
 
-                                let start_edge_position: Vec<usize> = loop_edges
-                                    .iter()
-                                    .positions(|edge_id| intersection_a_edges.contains(edge_id))
-                                    .collect();
+                        let edges_bet = if intersection_a_face == intersection_b_face {
+                            vec![]
+                        } else if self
+                            .mesh
+                            .get_neighbors_of_face_edgewise(intersection_a_face)
+                            .contains(&intersection_b_face)
+                        {
+                            let the_edge: Vec<usize> = intersection_a_edges
+                                .iter()
+                                .copied()
+                                .filter(|&edge_id| {
+                                    intersection_b_edges
+                                        .contains(&self.mesh.get_twin_of_edge(edge_id))
+                                })
+                                .collect();
 
-                                assert!(start_edge_position.len() == 1);
+                            assert!(the_edge.length() == 1);
 
-                                let end_edge_position: Vec<usize> = loop_edges
-                                    .iter()
-                                    .positions(|edge_id| intersection_b_edges.contains(edge_id))
-                                    .collect();
+                            vec![the_edge[0], self.mesh.get_twin_of_edge(the_edge[0])]
+                        } else {
+                            let start_edge_positions: Vec<usize> = loop_edges
+                                .iter()
+                                .positions(|edge_id| intersection_a_edges.contains(edge_id))
+                                .collect();
 
-                                assert!(end_edge_position.len() == 1);
+                            assert!(start_edge_positions.len() == 2);
 
-                                let mut edges_between_intersections = if start_edge_position[0]
-                                    <= end_edge_position[0]
-                                {
+                            loop_edges.remove(start_edge_positions[1]);
+
+                            let end_edge_positions: Vec<usize> = loop_edges
+                                .iter()
+                                .positions(|edge_id| intersection_b_edges.contains(edge_id))
+                                .collect();
+
+                            assert!(end_edge_positions.len() == 2);
+
+                            loop_edges.remove(end_edge_positions[1]);
+
+                            let start_edge_position: Vec<usize> = loop_edges
+                                .iter()
+                                .positions(|edge_id| intersection_a_edges.contains(edge_id))
+                                .collect();
+
+                            assert!(start_edge_position.len() == 1);
+
+                            let end_edge_position: Vec<usize> = loop_edges
+                                .iter()
+                                .positions(|edge_id| intersection_b_edges.contains(edge_id))
+                                .collect();
+
+                            assert!(end_edge_position.len() == 1);
+
+                            let mut edges_between_intersections =
+                                if start_edge_position[0] <= end_edge_position[0] {
                                     loop_edges[(start_edge_position[0] + 1)..end_edge_position[0]]
                                         .to_vec()
                                 } else {
@@ -2447,237 +2411,269 @@ impl MeshResource {
                                     .concat()
                                 };
 
-                                let first_edge = self.mesh.get_twin_of_edge(
-                                    *edges_between_intersections.first().unwrap(),
-                                );
-                                let last_edge = self
-                                    .mesh
-                                    .get_twin_of_edge(*edges_between_intersections.last().unwrap());
+                            let first_edge = self
+                                .mesh
+                                .get_twin_of_edge(*edges_between_intersections.first().unwrap());
+                            let last_edge = self
+                                .mesh
+                                .get_twin_of_edge(*edges_between_intersections.last().unwrap());
 
-                                edges_between_intersections.insert(0, first_edge);
-                                edges_between_intersections.push(last_edge);
+                            edges_between_intersections.insert(0, first_edge);
+                            edges_between_intersections.push(last_edge);
 
-                                edges_between_intersections
-                            };
-
-                            let mut rev_edges_between_intersections = edges_bet.clone();
-                            rev_edges_between_intersections.reverse();
-
-                            // println!("{} {}", start_edge_position, end_edge_position);
-                            // println!("edges between: {:?}", edges_between_intersections);
-                            // println!("all edges: {:?}", new_sol.paths[loop_id].edges);
-
-                            let this_connection = intersection_connections.len();
-                            let twin_connection = intersection_connections.len() + 1;
-
-                            intersection_connections.push(Edge {
-                                root: intersection_a,
-                                face: None,
-                                next: None,
-                                twin: Some(twin_connection),
-                                label: Some(new_sol.paths[loop_id].direction as usize),
-                                direction: Some(new_sol.paths[loop_id].direction),
-                                part_of_path: Some(loop_id),
-                                edges_between: Some(edges_bet),
-                                ..default()
-                            });
-
-                            vertexpair_to_edge.insert(
-                                (
-                                    intersection_a,
-                                    intersection_b,
-                                    new_sol.paths[loop_id].direction as usize,
-                                ),
-                                this_connection,
-                            );
-                            vertexpair_to_edge.insert(
-                                (
-                                    intersection_b,
-                                    intersection_a,
-                                    new_sol.paths[loop_id].direction as usize,
-                                ),
-                                twin_connection,
-                            );
-
-                            intersection_connections.push(Edge {
-                                root: intersection_b,
-                                face: None,
-                                next: None,
-                                twin: Some(this_connection),
-                                label: Some(new_sol.paths[loop_id].direction as usize),
-                                direction: Some(new_sol.paths[loop_id].direction),
-                                part_of_path: Some(loop_id),
-                                edges_between: Some(rev_edges_between_intersections),
-                                ..default()
-                            });
-                        }
-                    }
-
-                    for intersection_connection in 0..intersection_connections.len() {
-                        let edge = &intersection_connections[intersection_connection];
-
-                        let loop_id = edge.part_of_path.unwrap();
-
-                        let intersection_ordering_in_loop =
-                            loop_to_intersections.get(&loop_id).unwrap();
-
-                        let u = edge.root;
-                        let v = intersection_connections[edge.twin.unwrap()].root;
-
-                        let pair = intersection_ordering_in_loop
-                            .windows(2)
-                            .filter(|x| (x[0] == u && x[1] == v) || (x[0] == v && x[1] == u))
-                            .next()
-                            .unwrap();
-
-                        let forwards =
-                            pair.iter().position(|&x| x == u) < pair.iter().position(|&x| x == v);
-
-                        let seq = &intersections[v].ordering;
-
-                        let this_edges: Vec<usize> =
-                            seq.iter().filter(|x| x.0 == loop_id).map(|x| x.1).collect();
-
-                        let other_loop = seq.iter().filter(|x| x.0 != loop_id).next().unwrap().0;
-                        let other_edges: Vec<usize> = seq
-                            .iter()
-                            .filter(|x| x.0 == other_loop)
-                            .map(|x| x.1)
-                            .collect();
-
-                        let mut this_first = new_sol.paths[loop_id]
-                            .edges
-                            .iter()
-                            .find_or_first(|x| this_edges.contains(x))
-                            .unwrap()
-                            .clone();
-                        let other_first = new_sol.paths[other_loop]
-                            .edges
-                            .iter()
-                            .find_or_first(|x| other_edges.contains(x))
-                            .unwrap()
-                            .clone();
-
-                        let mut this_second = this_edges
-                            .iter()
-                            .filter(|&&x| x != this_first)
-                            .next()
-                            .unwrap()
-                            .clone();
-                        let other_second = other_edges
-                            .iter()
-                            .filter(|&&x| x != other_first)
-                            .next()
-                            .unwrap()
-                            .clone();
-
-                        if !forwards {
-                            swap(&mut this_first, &mut this_second);
-                        }
-
-                        let next_step = seq[(seq
-                            .iter()
-                            .position(|x| x.0 == loop_id && x.1 == this_first)
-                            .unwrap()
-                            + 1)
-                            % 4]
-                        .1;
-
-                        let other_forwards = next_step == other_second;
-
-                        let mut intersection_ordering_in_other =
-                            loop_to_intersections.get(&other_loop).unwrap().clone();
-
-                        intersection_ordering_in_other
-                            .remove(intersection_ordering_in_other.len() - 1);
-
-                        let cur_pos = intersection_ordering_in_other
-                            .iter()
-                            .position(|&x| x == v)
-                            .unwrap();
-
-                        let next_other_step = if other_forwards {
-                            (cur_pos + intersection_ordering_in_other.len() + 1)
-                                % intersection_ordering_in_other.len()
-                        } else {
-                            (cur_pos + intersection_ordering_in_other.len() - 1)
-                                % intersection_ordering_in_other.len()
+                            edges_between_intersections
                         };
 
-                        let next_pos = intersection_ordering_in_other[next_other_step];
+                        let mut rev_edges_between_intersections = edges_bet.clone();
+                        rev_edges_between_intersections.reverse();
 
-                        let next_edge_id = vertexpair_to_edge
-                            .get(&(v, next_pos, new_sol.paths[other_loop].direction as usize))
-                            .copied()
-                            .unwrap();
+                        // println!("{} {}", start_edge_position, end_edge_position);
+                        // println!("edges between: {:?}", edges_between_intersections);
+                        // println!("all edges: {:?}", new_sol.paths[loop_id].edges);
 
-                        intersection_connections[intersection_connection].next = Some(next_edge_id);
+                        let this_connection = intersection_connections.len();
+                        let twin_connection = intersection_connections.len() + 1;
+
+                        intersection_connections.push(Edge {
+                            root: intersection_a,
+                            face: None,
+                            next: None,
+                            twin: Some(twin_connection),
+                            label: Some(new_sol.paths[loop_id].direction as usize),
+                            direction: Some(new_sol.paths[loop_id].direction),
+                            part_of_path: Some(loop_id),
+                            edges_between: Some(edges_bet),
+                            ..default()
+                        });
+
+                        vertexpair_to_edge.insert(
+                            (
+                                intersection_a,
+                                intersection_b,
+                                new_sol.paths[loop_id].direction as usize,
+                            ),
+                            this_connection,
+                        );
+                        vertexpair_to_edge.insert(
+                            (
+                                intersection_b,
+                                intersection_a,
+                                new_sol.paths[loop_id].direction as usize,
+                            ),
+                            twin_connection,
+                        );
+
+                        intersection_connections.push(Edge {
+                            root: intersection_b,
+                            face: None,
+                            next: None,
+                            twin: Some(this_connection),
+                            label: Some(new_sol.paths[loop_id].direction as usize),
+                            direction: Some(new_sol.paths[loop_id].direction),
+                            part_of_path: Some(loop_id),
+                            edges_between: Some(rev_edges_between_intersections),
+                            ..default()
+                        });
+                    }
+                }
+
+                for intersection_connection in 0..intersection_connections.len() {
+                    let edge = &intersection_connections[intersection_connection];
+
+                    let loop_id = edge.part_of_path.unwrap();
+
+                    let intersection_ordering_in_loop =
+                        loop_to_intersections.get(&loop_id).unwrap();
+
+                    let u = edge.root;
+                    let v = intersection_connections[edge.twin.unwrap()].root;
+
+                    let pair = intersection_ordering_in_loop
+                        .windows(2)
+                        .filter(|x| (x[0] == u && x[1] == v) || (x[0] == v && x[1] == u))
+                        .next()
+                        .unwrap();
+
+                    let forwards =
+                        pair.iter().position(|&x| x == u) < pair.iter().position(|&x| x == v);
+
+                    let seq = &intersections[v].ordering;
+
+                    let this_edges: Vec<usize> =
+                        seq.iter().filter(|x| x.0 == loop_id).map(|x| x.1).collect();
+
+                    let other_loop = seq.iter().filter(|x| x.0 != loop_id).next().unwrap().0;
+                    let other_edges: Vec<usize> = seq
+                        .iter()
+                        .filter(|x| x.0 == other_loop)
+                        .map(|x| x.1)
+                        .collect();
+
+                    let mut this_first = new_sol.paths[loop_id]
+                        .edges
+                        .iter()
+                        .find_or_first(|x| this_edges.contains(x))
+                        .unwrap()
+                        .clone();
+                    let other_first = new_sol.paths[other_loop]
+                        .edges
+                        .iter()
+                        .find_or_first(|x| other_edges.contains(x))
+                        .unwrap()
+                        .clone();
+
+                    let mut this_second = this_edges
+                        .iter()
+                        .filter(|&&x| x != this_first)
+                        .next()
+                        .unwrap()
+                        .clone();
+                    let other_second = other_edges
+                        .iter()
+                        .filter(|&&x| x != other_first)
+                        .next()
+                        .unwrap()
+                        .clone();
+
+                    if !forwards {
+                        swap(&mut this_first, &mut this_second);
                     }
 
-                    new_sol.intersection_graph =
-                        Doconeli::from_vertices_and_edges(intersections, intersection_connections);
+                    let next_step = seq[(seq
+                        .iter()
+                        .position(|x| x.0 == loop_id && x.1 == this_first)
+                        .unwrap()
+                        + 1)
+                        % 4]
+                    .1;
 
-                    for face_id in 0..new_sol.intersection_graph.faces.len() {
-                        let labels = new_sol
-                            .intersection_graph
-                            .get_edges_of_face(face_id)
-                            .into_iter()
-                            .map(|edge_id| new_sol.intersection_graph.edges[edge_id].direction);
+                    let other_forwards = next_step == other_second;
 
-                        if labels.clone().any(|l| l.is_none()) {
-                            timer.report(&format!(
-                                "[❌] Detected incorrect region (some labels undefined)"
-                            ));
-                            continue 'outer;
-                        }
+                    let mut intersection_ordering_in_other =
+                        loop_to_intersections.get(&other_loop).unwrap().clone();
 
-                        let boundary_size = labels.clone().count();
-                        if boundary_size > 6 || boundary_size < 3 {
-                            timer.report(&format!(
-                                "❌  Detected incorrect region (boundary has size: {boundary_size})"
-                            ));
-                            continue 'outer;
-                        }
+                    intersection_ordering_in_other.remove(intersection_ordering_in_other.len() - 1);
 
-                        let count_x = labels
-                            .clone()
-                            .filter(|&l| l == Some(PrincipalDirection::X))
-                            .count();
-                        if count_x > 2 {
-                            timer.report(&format!("❌  Detected incorrect region {face_id} (has too many Z in boundary: {count_x})"));
-                            continue 'outer;
-                        }
+                    let cur_pos = intersection_ordering_in_other
+                        .iter()
+                        .position(|&x| x == v)
+                        .unwrap();
 
-                        let count_y = labels
-                            .clone()
-                            .filter(|&l| l == Some(PrincipalDirection::Y))
-                            .count();
-                        if count_y > 2 {
-                            timer.report(&format!("❌  Detected incorrect region {face_id} (has too many Y in boundary: {count_y})"));
-                            continue 'outer;
-                        }
+                    let next_other_step = if other_forwards {
+                        (cur_pos + intersection_ordering_in_other.len() + 1)
+                            % intersection_ordering_in_other.len()
+                    } else {
+                        (cur_pos + intersection_ordering_in_other.len() - 1)
+                            % intersection_ordering_in_other.len()
+                    };
 
-                        let count_z = labels
-                            .clone()
-                            .filter(|&l| l == Some(PrincipalDirection::Z))
-                            .count();
-                        if count_z > 2 {
-                            timer.report(&format!("❌  Detected incorrect region {face_id} (has too many Z in boundary: {count_z})"));
-                            continue 'outer;
-                        }
+                    let next_pos = intersection_ordering_in_other[next_other_step];
+
+                    let next_edge_id = vertexpair_to_edge
+                        .get(&(v, next_pos, new_sol.paths[other_loop].direction as usize))
+                        .copied()
+                        .unwrap();
+
+                    intersection_connections[intersection_connection].next = Some(next_edge_id);
+                }
+
+                new_sol.intersection_graph =
+                    Doconeli::from_vertices_and_edges(intersections, intersection_connections);
+
+                for face_id in 0..new_sol.intersection_graph.faces.len() {
+                    let labels = new_sol
+                        .intersection_graph
+                        .get_edges_of_face(face_id)
+                        .into_iter()
+                        .map(|edge_id| new_sol.intersection_graph.edges[edge_id].direction);
+
+                    if labels.clone().any(|l| l.is_none()) {
+                        timer.report(&format!(
+                            "[❌] Detected incorrect region (some labels undefined)"
+                        ));
+                        continue 'outer;
+                    }
+
+                    let boundary_size = labels.clone().count();
+                    if boundary_size > 6 || boundary_size < 3 {
+                        timer.report(&format!(
+                            "❌  Detected incorrect region (boundary has size: {boundary_size})"
+                        ));
+                        continue 'outer;
+                    }
+
+                    let count_x = labels
+                        .clone()
+                        .filter(|&l| l == Some(PrincipalDirection::X))
+                        .count();
+                    if count_x > 2 {
+                        timer.report(&format!("❌  Detected incorrect region {face_id} (has too many Z in boundary: {count_x})"));
+                        continue 'outer;
+                    }
+
+                    let count_y = labels
+                        .clone()
+                        .filter(|&l| l == Some(PrincipalDirection::Y))
+                        .count();
+                    if count_y > 2 {
+                        timer.report(&format!("❌  Detected incorrect region {face_id} (has too many Y in boundary: {count_y})"));
+                        continue 'outer;
+                    }
+
+                    let count_z = labels
+                        .clone()
+                        .filter(|&l| l == Some(PrincipalDirection::Z))
+                        .count();
+                    if count_z > 2 {
+                        timer.report(&format!("❌  Detected incorrect region {face_id} (has too many Z in boundary: {count_z})"));
+                        continue 'outer;
                     }
                 }
 
                 timer.report(&format!("🆗  Loop passed regions checks"));
 
-                return Some(new_sol);
+                new_sol.regions =
+                    self.get_subsurfaces(&new_sol, &new_sol.intersection_graph, ColorType::Random);
+
+                if let Some(new_prim) = Primalization::initialize(&self.mesh.clone(), &new_sol) {
+                    prim = new_prim;
+                } else {
+                    timer.report(&format!("❌  Detected impossible primalization 1111"));
+                    continue 'outer;
+                }
+
+                if !prim.place_primals(singularities, configuration) {
+                    timer.report(&format!(
+                        "❌  Detected impossible primal placement {:?}",
+                        new_sol.paths.len()
+                    ));
+                    continue 'outer;
+                }
+
+                timer.report(&format!("🆗  Primals placed"));
+
+                if !prim.connect_primals(configuration) {
+                    timer.report(&format!(
+                        "❌  Detected impossible primal connections {:?}",
+                        new_sol.paths.len()
+                    ));
+                    continue 'outer;
+                }
+
+                timer.report(&format!("🆗  Primals connected"));
             }
+
+            return Some((new_sol, prim));
         }
 
         return None;
     }
 
-    pub fn verify_sol(&self, mut sol: &Solution) -> Option<Solution> {
+    pub fn verify_sol(
+        &self,
+        mut sol: &Solution,
+        configuration: &mut Configuration,
+    ) -> Option<(Solution, Primalization)> {
         let mut new_sol = sol.clone();
 
         let mut timer = Timer::new();
@@ -3208,6 +3204,48 @@ impl MeshResource {
 
         timer.report(&format!("🆗  Loop passed regions checks"));
 
-        return Some(new_sol);
+        new_sol.regions =
+            self.get_subsurfaces(&new_sol, &new_sol.intersection_graph, ColorType::Random);
+
+        let prim_res = Primalization::initialize(&self.mesh.clone(), &new_sol);
+
+        if prim_res.is_none() {
+            timer.report(&format!("❌  Detected impossible primalization 1111"));
+            return None;
+        }
+
+        let mut prim = prim_res.unwrap();
+
+        let singularities =
+            self.get_top_n_percent_singularities(configuration.percent_singularities);
+
+        if let Some(new_prim) = Primalization::initialize(&self.mesh.clone(), &new_sol) {
+            prim = new_prim;
+        } else {
+            timer.report(&format!("❌  Detected impossible primalization 1111"));
+            return None;
+        }
+
+        if !prim.place_primals(singularities, configuration) {
+            timer.report(&format!(
+                "❌  Detected impossible primal placement {:?}",
+                new_sol.paths.len()
+            ));
+            return None;
+        }
+
+        timer.report(&format!("🆗  Primals placed"));
+
+        if !prim.connect_primals(configuration) {
+            timer.report(&format!(
+                "❌  Detected impossible primal connections {:?}",
+                new_sol.paths.len()
+            ));
+            return None;
+        }
+
+        timer.report(&format!("🆗  Primals connected"));
+
+        return Some((new_sol, prim));
     }
 }

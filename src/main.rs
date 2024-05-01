@@ -7,9 +7,10 @@ mod utils;
 mod duaprima;
 
 use crate::duaprima::Duaprima;
-use crate::solution::{PrimalVertexType, Primalization, Subface, Surface};
+use crate::solution::{evaluate, PrimalVertexType, Primalization, Subface, Surface};
 use crate::ui::ui;
 use crate::utils::{get_bevy_mesh_of_graph, get_bevy_mesh_of_mesh, get_bevy_mesh_of_regions, get_labeling_of_mesh};
+use rayon::prelude::*;
 use bevy::prelude::*;
 use bevy::window::WindowMode;
 use bevy::{diagnostic::LogDiagnosticsPlugin, time::common_conditions::on_timer};
@@ -90,6 +91,11 @@ pub struct Configuration {
 
     pub draw_wireframe: bool,
     pub draw_wireframe_alt: bool,
+
+    pub primal_w_graph: bool,
+    pub last_primal_w_graph: Duaprima,
+
+    pub path_weight: f32,
 
     pub draw_loops: bool,
     pub draw_centers: bool,
@@ -220,7 +226,13 @@ fn setup(mut commands: Commands, mut configuration: ResMut<Configuration>) {
 fn setup_configuration(configuration: &mut ResMut<Configuration>) {
 
     configuration.algorithm_iterations = 10;
-    configuration.algorithm_samples = 100;
+    configuration.algorithm_samples = 2000;
+    configuration.gamma = 15.0;
+    configuration.percent_singularities = 50;
+
+    configuration.loop_scoring_scheme = LoopScoring::SingularitySeparationSpread;
+
+    configuration.path_weight = 2.0;
 
     // configuration.camera_autorotate = true;
     // configuration.camera_speed = 20;
@@ -442,7 +454,10 @@ pub fn handle_events(
                             .expect("Time went backwards")
                             .as_millis());
             
-                mesh_resmut.primalization.granulated_mesh.write_to_obj(&PathBuf::from(path));
+                let res = mesh_resmut.primalization.granulated_mesh.write_to_obj(&PathBuf::from(path));
+
+                println!("result {:?}", res);
+
             }
 
             ActionEvent::ExportLayout => {
@@ -479,7 +494,9 @@ pub fn handle_events(
                             .expect("Time went backwards")
                             .as_millis());
 
-                get_labeling_of_mesh(&PathBuf::from(path), &mesh_resmut.primalization.granulated_mesh, &mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec());
+                let res = get_labeling_of_mesh(&PathBuf::from(path), &mesh_resmut.primalization.granulated_mesh, &mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec());
+                
+                println!("result {:?}", res);
 
                 // mesh_resmut.primalization.patch_graph.write_to_obj(&PathBuf::from(path));
             }
@@ -514,101 +531,6 @@ pub fn handle_events(
 
                 mesh_resmut.initialize(&mut configuration);
 
-                configuration.draw_loops = true;
-                configuration.draw_paths = false;
-
-            }
-
-            ActionEvent::PrimalizePlaceCenters => {
-                mesh_resmut.primalization = Primalization::initialize(&mesh_resmut.mesh, &mesh_resmut.sol);
-
-                let singularities = mesh_resmut.get_top_n_percent_singularities(configuration.percent_singularities);
-                mesh_resmut.primalization.place_primals(singularities, &configuration);
-
-            }
-            ActionEvent::PrimalizeConnectCenters => {
-
-                mesh_resmut.primalization.connect_primals(&configuration);
-
-                println!("Found valid paths: {:?}/{:?}", mesh_resmut.primalization.edge_to_paths.iter().flatten().count(), mesh_resmut.primalization.edge_to_paths.len()/2);
-
-                configuration.draw_loops = false;
-                configuration.draw_paths = true;
-
-            }
-            ActionEvent::RunAlgo => {
-                for _ in 0..configuration.algorithm_iterations {
-                    for i in 0..10 {
-                        configuration.choose_component = i;
-                        configuration.choose_direction = PrincipalDirection::X;
-                        if let Some(new_sol) = mesh_resmut.add_loop(&mut configuration)
-                        {
-                            mesh_resmut.sol = new_sol;
-                            break;
-                        }
-                    }
-                    for i in 0..10 {
-                        configuration.choose_component = i;
-                        configuration.choose_direction = PrincipalDirection::Y;
-                        if let Some(new_sol) = mesh_resmut.add_loop(&mut configuration)                        
-                        {
-                            mesh_resmut.sol = new_sol;
-                            break;
-                        }
-                    }
-                    for i in 0..10 {
-                        configuration.choose_component = i;
-                        configuration.choose_direction = PrincipalDirection::Z;
-                        if let Some(new_sol) = mesh_resmut.add_loop(&mut configuration)
-                        {
-                            mesh_resmut.sol = new_sol;
-                            break;
-                        }
-                    }
-                }
-
-                configuration.draw_loops = true;
-                configuration.draw_paths = false;
-        
-                mesh_resmut.sol.regions = mesh_resmut.get_subsurfaces(&mesh_resmut.sol, &mesh_resmut.sol.intersection_graph, ColorType::Random);
-            }
-            ActionEvent::AddLoop => {
-
-                for i in 0..4 {
-                    if let Some(sol) = mesh_resmut.add_loop(&mut configuration) {
-                        mesh_resmut.sol = sol;
-                        break;
-                    }
-                }
-
-                configuration.draw_loops = true;
-                configuration.draw_paths = false;
-
-                mesh_resmut.sol.regions = mesh_resmut.get_subsurfaces(&mesh_resmut.sol, &mesh_resmut.sol.intersection_graph, ColorType::Random);                
-            },
-            ActionEvent::UndoLoop => {
-
-                let last_id = mesh_resmut.sol.paths.len()-1;
-
-                mesh_resmut.remove_path(last_id);
-
-                mesh_resmut.sol.regions = mesh_resmut.get_subsurfaces(&mesh_resmut.sol, &mesh_resmut.sol.intersection_graph, ColorType::Random);  
-
-                configuration.draw_loops = true;
-                configuration.draw_paths = false;
-
-            },
-            ActionEvent::RemoveLoop => {
-
-                mesh_resmut.remove_path(configuration.remove_loop);
-                
-                mesh_resmut.sol.regions = mesh_resmut.get_subsurfaces(&mesh_resmut.sol, &mesh_resmut.sol.intersection_graph, ColorType::Random);  
-
-                configuration.draw_loops = true;
-                configuration.draw_paths = false;
-
-            },
-            ActionEvent::InitPrimalize => {
                 // For each crossing, color its face
 
                 mesh_resmut.primalization2 = Primalization::default();
@@ -743,6 +665,253 @@ pub fn handle_events(
                     mesh_resmut.mesh.edges[edge].face_labels = Some((label_1, label_2));
                 }
 
+                configuration.path_weight = 0.5;
+
+                let direction_choices = [
+                    [PrincipalDirection::X, PrincipalDirection::Y, PrincipalDirection::Z],
+                    [PrincipalDirection::X, PrincipalDirection::Z, PrincipalDirection::Y],
+                    [PrincipalDirection::Y, PrincipalDirection::X, PrincipalDirection::Z],
+                    [PrincipalDirection::Y, PrincipalDirection::Z, PrincipalDirection::X],
+                    [PrincipalDirection::Z, PrincipalDirection::X, PrincipalDirection::Y],
+                    [PrincipalDirection::Z, PrincipalDirection::Y, PrincipalDirection::X],
+                    ];
+                let component_choices = [0];
+                let algo_choices = [LoopScoring::PathLength, LoopScoring::SingularitySeparationSpread, LoopScoring::SingularitySeparationCount];
+
+                let choices = direction_choices.iter().cartesian_product(component_choices.iter()).cartesian_product(algo_choices.iter()).collect_vec();
+
+                let sols: Vec<_> = choices.par_iter().map(|&((directions, component), &loop_scoring)| {
+
+                    let mut local_mesh_resmut = mesh_resmut.clone();
+                    let mut local_configuration = configuration.clone();
+                    
+                    local_mesh_resmut.initialize(&mut local_configuration);
+
+                    let mut local_score = 0.0;
+                    for direction in directions {
+                        
+                        local_configuration.choose_direction = *direction;
+                        local_configuration.choose_component = *component;
+                        local_configuration.loop_scoring_scheme = loop_scoring;
+                        if let Some((new_sol, primalization)) = local_mesh_resmut.add_loop(&mut local_configuration) {
+                            
+                            local_mesh_resmut.sol = new_sol;
+                            local_mesh_resmut.primalization = primalization;
+                            
+                        } else {
+                            return None;
+                        }
+                    }
+
+                    local_score = evaluate(&local_mesh_resmut.primalization).unwrap();
+
+
+                    Some((local_mesh_resmut, local_score, directions, component))
+                    
+                }).flatten().collect();
+
+                for (resmut, score, direction, component) in sols.iter() {
+                    println!("!!! Found solution [score: {:?}, direction: {:?}, component: {:?}]", score, direction, component);
+                }
+
+                let (best_resmut, best_score, best_direction, best_component) = sols.into_iter().min_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).unwrap();
+
+                *mesh_resmut = best_resmut.clone();
+                println!("!!! Found best solution [score: {:?}, direction: {:?}, component: {:?}]", best_score, best_direction, best_component);
+
+                configuration.draw_loops = true;
+                configuration.draw_paths = false;
+
+            }
+
+            ActionEvent::PrimalizePlaceCenters => {
+                mesh_resmut.primalization = Primalization::initialize(&mesh_resmut.mesh, &mesh_resmut.sol).unwrap();
+
+                let singularities = mesh_resmut.get_top_n_percent_singularities(configuration.percent_singularities);
+                mesh_resmut.primalization.place_primals(singularities, &configuration);
+
+            }
+            ActionEvent::PrimalizeConnectCenters => {
+
+
+                mesh_resmut.primalization.connect_primals(&mut configuration);
+
+                println!("Found valid paths: {:?}/{:?}", mesh_resmut.primalization.edge_to_paths.iter().flatten().count(), mesh_resmut.primalization.edge_to_paths.len()/2);
+
+                configuration.draw_loops = false;
+                configuration.draw_paths = true;
+
+            }
+            ActionEvent::RunAlgo => {
+
+                let number_of_samples = 300;
+                let number_of_candidates = 5;
+                let number_of_winners = 1;
+                let number_of_loops = 10;
+                
+                let direction_choices = [PrincipalDirection::X, PrincipalDirection::Y, PrincipalDirection::Z];
+                let component_choices = [0, 1, 2];
+                let algo_choices = [LoopScoring::SingularitySeparationSpread, LoopScoring::SingularitySeparationSpread];
+                let path_weight_choices = 0.4..=0.6;
+                let gamma_choices = 2.5..15.0;
+                let singularity_choices = 2..=25;
+                
+                let configuration_clone = configuration.clone();
+                let mut winners: Vec<MeshResource> = vec![mesh_resmut.clone(); number_of_winners];
+
+                for iteration in 0..configuration.algorithm_iterations {
+
+                    println!("!!! Iteration {:?}/{:?}", iteration, configuration.algorithm_iterations);
+
+                    let mut sols: Vec<_> = (0..number_of_candidates).into_par_iter().map(|i| {
+                            let mut rand = rand::thread_rng();
+
+                            let mut local_mesh_resmut = winners[rand.gen_range(0..number_of_winners)].clone();
+
+                            let mut local_configuration = configuration_clone.clone();
+
+                            let mut local_score = f32::MAX;
+
+                            for step in 0..number_of_loops {
+                                local_configuration.choose_direction = direction_choices[rand.gen_range(0..3)];
+                                local_configuration.choose_component = component_choices[rand.gen_range(0..3)];
+                                local_configuration.loop_scoring_scheme = algo_choices[rand.gen_range(0..2)];
+                                local_configuration.path_weight = rand.gen_range(path_weight_choices.clone());
+                                local_configuration.gamma = rand.gen_range(gamma_choices.clone());
+                                local_configuration.percent_singularities = rand.gen_range(singularity_choices.clone());
+                                local_configuration.algorithm_samples = number_of_samples;
+
+                                if let Some((new_sol, primalization)) = local_mesh_resmut.add_loop(&mut local_configuration) {
+                                    local_score = evaluate(&primalization).unwrap();   
+
+                                    local_mesh_resmut.sol = new_sol;
+                                    local_mesh_resmut.primalization = primalization;
+                                }
+                            }
+
+                            for dir in [PrincipalDirection::X, PrincipalDirection::Y, PrincipalDirection::Z].iter() {
+                                let paths = local_mesh_resmut.sol.paths.iter().enumerate().filter(|(id, p)| p.direction == *dir).map(|(id, p)| id).collect_vec();
+                                if paths.len() == 1 {
+                                    continue;
+                                }
+                                
+                                for &path in paths.iter() {
+                                    let mut local_mesh_resmut_copy = local_mesh_resmut.clone();
+                                    let score = evaluate(&local_mesh_resmut_copy.primalization).unwrap();
+                                    if local_mesh_resmut_copy.remove_path(path, &mut configuration) {
+                                        let new_score = evaluate(&local_mesh_resmut_copy.primalization).unwrap();
+                                        println!("!!! Score {:?} -> {:?} = {:?}", score, new_score, score - new_score);
+                                        // if score increases by at most 1% we remove the loop
+                                        let percentual_change = (new_score - score) / score;
+                                        if percentual_change < 0.01 {
+                                            new_winner = local_mesh_resmut_copy;
+                                            println!("!!! Removed loop {:?}", path);
+                                        }   
+                                    }
+                                }
+    
+                                
+                            }
+
+                            Some((local_mesh_resmut, local_score))
+                        
+                    }).flatten().collect();
+
+                    if sols.len() == 0 {
+                        break;
+                    }
+
+                    // get #number_of_winners best solutions
+                    // sort the solutions
+                    sols.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+                    let top_sols = sols.iter().take(number_of_winners).collect_vec();
+                    
+                    for (_, score) in &sols {
+                        println!("!!! Found sol [{:?}]", score);
+                    }
+  
+                    for (_, score) in &top_sols {
+                        println!("!!! Best sol [{:?}]", score);
+                    }
+
+                    winners = top_sols.iter().map(|x| x.0.clone()).map(|winner| {
+                        let mut new_winner = winner.clone();
+                        
+
+                        new_winner
+                        
+                    }).collect_vec();
+
+                }
+
+                *mesh_resmut = winners[0].clone();
+
+
+                configuration.draw_loops = true;
+                configuration.draw_paths = false;
+            }
+            ActionEvent::AddLoop => {
+
+                for i in 0..4 {
+                    if let Some((sol, primalization)) = mesh_resmut.add_loop(&mut configuration) {
+                        mesh_resmut.sol = sol;
+                        mesh_resmut.primalization = primalization;
+                        break;
+                    }
+                }
+
+                println!("new scorE: {:?}", evaluate(&mesh_resmut.primalization).unwrap());
+
+                configuration.draw_loops = true;
+                configuration.draw_paths = false;               
+            },
+            ActionEvent::UndoLoop => {
+
+                // let last_id = mesh_resmut.sol.paths.len()-1;
+
+                // mesh_resmut.remove_path(last_id);
+
+                // mesh_resmut.sol.regions = mesh_resmut.get_subsurfaces(&mesh_resmut.sol, &mesh_resmut.sol.intersection_graph, ColorType::Random);  
+
+                // configuration.draw_loops = true;
+                // configuration.draw_paths = false;
+
+            },
+            ActionEvent::RemoveLoop => {
+
+                // mesh_resmut.remove_path(configuration.remove_loop);
+                
+                // mesh_resmut.sol.regions = mesh_resmut.get_subsurfaces(&mesh_resmut.sol, &mesh_resmut.sol.intersection_graph, ColorType::Random);  
+
+                // configuration.draw_loops = true;
+                // configuration.draw_paths = false;
+
+            },
+            ActionEvent::InitPrimalize => {
+
+                for dir in [PrincipalDirection::X, PrincipalDirection::Y, PrincipalDirection::Z].iter() {
+                    let paths = mesh_resmut.sol.paths.iter().enumerate().filter(|(id, p)| p.direction == *dir).map(|(id, p)| id).collect_vec();
+                    if paths.len() == 1 {
+                        continue;
+                    }
+                    
+                    for &path in paths.iter() {
+                        let mut mesh_resmut_copy = mesh_resmut.clone();
+                        let score = evaluate(&mesh_resmut_copy.primalization).unwrap();
+                        if mesh_resmut_copy.remove_path(path, &mut configuration) {
+                            let new_score = evaluate(&mesh_resmut_copy.primalization).unwrap();
+                            println!("!!! Score {:?} -> {:?} = {:?}", score, new_score, (new_score - score) / score);
+                            // if score increases by at most 1% we remove the loop
+                            let percentual_change = (new_score - score) / score;
+                            if percentual_change < 0.05 {
+                                *mesh_resmut = mesh_resmut_copy;
+                                println!("!!! Removed loop {:?}", path);
+                                return;
+                            }   
+                        }
+                    }
+                }
 
             },
             ActionEvent::StepPrimalize => {
@@ -1100,6 +1269,10 @@ fn draw_gizmos(
         );
     }
 
+    if configuration.primal_w_graph && configuration.render_type == RenderType::Original {
+        draw_duaprima_edges(&mut gizmos, &configuration, &configuration.last_primal_w_graph);
+    }
+
     if configuration.draw_wireframe && configuration.render_type == RenderType::RegionsMesh { 
         let color = match !configuration.black {
             true => ColorType::Static(Color::BLACK),
@@ -1235,5 +1408,58 @@ pub fn draw_graph_edges(
             color,
         );
         drawn.insert((u, v));
+    }
+}
+
+fn draw_duaprima_edges(
+    gizmos: &mut Gizmos,
+    configuration: &Res<Configuration>,
+    duaprima: &Duaprima
+) {
+
+    let mut total = 0.0f32;
+    let mut max = 0.0f32;
+    let mut min = f32::MAX;
+
+    for (node_id, node) in &duaprima.nodes {
+        let this_pos = node.position;
+
+        for (neighbor_id, weight) in &duaprima.neighbors[&node_id] {
+            let neighbor_pos = duaprima.nodes[&neighbor_id].position;
+        
+            total += weight;
+            max = max.max(*weight);
+            min = min.min(*weight);
+            
+        }
+    }
+
+    for (node_id, node) in &duaprima.nodes {
+        let this_pos = node.position;
+
+        for (neighbor_id, weight) in &duaprima.neighbors[&node_id] {
+            let neighbor_pos = duaprima.nodes[&neighbor_id].position;
+
+            // Color based on weight (and the max)
+            // let color = utils::color_map(weight, utils::PARULA.to_vec());
+
+            // map weight to 0 to 1
+            let weight = (weight - min) / (max - min);
+            let color = utils::color_map(weight, utils::PARULA.to_vec());
+
+            gizmos.line(
+                transform_coordinates(
+                    configuration.translation,
+                    configuration.scale,
+                    this_pos,
+                ),
+                transform_coordinates(
+                    configuration.translation,
+                    configuration.scale,
+                    neighbor_pos,
+                ),
+                color,
+            );
+        }
     }
 }

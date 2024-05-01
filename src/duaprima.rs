@@ -8,7 +8,7 @@ use bevy::prelude::*;
 
 use ordered_float::OrderedFloat;
 
-use crate::doconeli::Doconeli;
+use crate::{doconeli::Doconeli, Configuration};
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -301,6 +301,7 @@ impl Duaprima {
 
     pub fn precompute_label_weights(
         &mut self,
+        configuration: &Configuration,
         target_labels: (usize, usize),
         face_labels: HashMap<usize, usize>,
         edge_labels: HashMap<(usize, usize), (usize, usize)>,
@@ -312,7 +313,7 @@ impl Duaprima {
                 let v_j = self.neighbors[v_i][j].0;
 
                 self.neighbors.entry(*v_i).and_modify(|node_neighbors| {
-                    let mut mult = 1.;
+                    let mut mult = 3.;
 
                     // if not a cutting_path, then we want any edges that have target_labels.0 in the labels
                     if !cutting_path {
@@ -364,12 +365,13 @@ impl Duaprima {
                             self.nodes[&v_j].node_type.clone(),
                         ) {
                             (NodeType::Vertex(i), NodeType::Vertex(j)) => {
+                                mult = 2.0;
                                 let edge_label = edge_labels.get(&(i, j));
                                 if edge_label.is_some() {
                                     if edge_label == Some(&(target_labels.0, target_labels.1))
                                         || edge_label == Some(&(target_labels.1, target_labels.0))
                                     {
-                                        mult = 0.0001;
+                                        mult = 2.0_f32.powf(configuration.path_weight);
                                     }
                                 }
                                 let edge_label = edge_labels.get(&(j, i));
@@ -377,18 +379,19 @@ impl Duaprima {
                                     if edge_label == Some(&(target_labels.0, target_labels.1))
                                         || edge_label == Some(&(target_labels.1, target_labels.0))
                                     {
-                                        mult = 0.0001;
+                                        mult = 2.0_f32.powf(configuration.path_weight);
                                     }
                                 }
                             }
+
                             (NodeType::Vertex(i), NodeType::Face(j)) => {
-                                mult = 5.;
+                                mult = 4.;
                             }
                             (NodeType::Face(i), NodeType::Vertex(j)) => {
-                                mult = 5.;
+                                mult = 4.;
                             }
                             (NodeType::Face(i), NodeType::Face(j)) => {
-                                mult = 2.;
+                                mult = 3.;
                             }
                             _ => {}
                         }

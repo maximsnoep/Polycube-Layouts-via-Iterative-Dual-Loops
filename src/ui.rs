@@ -219,6 +219,8 @@ fn ui_algorithm_info(
 
     ui.add_space(10.);
 
+    ui.add(egui::Slider::new(&mut configuration.path_weight, 0.0..=1.0).text("path weight"));
+
     ui.horizontal(|ui| {
         ui.label("Primalization embedding");
         if ui.button("vertices").clicked() {
@@ -270,6 +272,7 @@ fn ui_rendering_info(
     ui.horizontal(|ui| {
         ui.checkbox(&mut configuration.draw_wireframe, "input mesh");
         ui.checkbox(&mut configuration.draw_wireframe_alt, "granulated mesh");
+        ui.checkbox(&mut configuration.primal_w_graph, "primal w graph");
     });
 
     ui.horizontal(|ui| {

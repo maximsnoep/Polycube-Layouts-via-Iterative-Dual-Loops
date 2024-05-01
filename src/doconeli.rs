@@ -327,8 +327,6 @@ impl Doconeli {
             vertices[root].some_edge = Some(edge_id);
         }
 
-        println!("oki dokii");
-
         Self::from_vertices_and_edges(vertices, edges)
     }
 
@@ -720,8 +718,6 @@ impl Doconeli {
         let e_ba = self.get_twin_of_edge(edge_id);
         let e_a1 = self.get_next_of_edge(e_ba);
         let e_1b = self.get_next_of_edge(e_a1);
-        println!("e_ba: {}, e_a1: {}, e_1b: {}", e_ba, e_a1, e_1b);
-        println!("next of e_1b: {}", self.get_next_of_edge(e_1b));
         assert!(self.get_next_of_edge(e_1b) == e_ba);
 
         assert!(self.get_root_of_edge(e_ba) == v_b);
