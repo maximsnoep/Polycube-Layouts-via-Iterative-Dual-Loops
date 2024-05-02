@@ -11,6 +11,7 @@ use crate::solution::{evaluate, PrimalVertexType, Primalization, Subface, Surfac
 use crate::ui::ui;
 use crate::utils::{get_bevy_mesh_of_graph, get_bevy_mesh_of_mesh, get_bevy_mesh_of_regions, get_labeling_of_mesh};
 use rayon::prelude::*;
+use rand::prelude::SliceRandom;
 use bevy::prelude::*;
 use bevy::window::WindowMode;
 use bevy::{diagnostic::LogDiagnosticsPlugin, time::common_conditions::on_timer};
@@ -225,7 +226,7 @@ fn setup(mut commands: Commands, mut configuration: ResMut<Configuration>) {
 
 fn setup_configuration(configuration: &mut ResMut<Configuration>) {
 
-    configuration.algorithm_iterations = 10;
+    configuration.algorithm_iterations = 1;
     configuration.algorithm_samples = 2000;
     configuration.gamma = 15.0;
     configuration.percent_singularities = 50;
@@ -687,7 +688,7 @@ pub fn handle_events(
                     
                     local_mesh_resmut.initialize(&mut local_configuration);
 
-                    let mut local_score = 0.0;
+                    let mut local_score = (f32::MAX, f32::MAX);
                     for direction in directions {
                         
                         local_configuration.choose_direction = *direction;
@@ -714,7 +715,7 @@ pub fn handle_events(
                     println!("!!! Found solution [score: {:?}, direction: {:?}, component: {:?}]", score, direction, component);
                 }
 
-                let (best_resmut, best_score, best_direction, best_component) = sols.into_iter().min_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).unwrap();
+                let (best_resmut, best_score, best_direction, best_component) = sols.into_iter().min_by(|a, b| (a.1.0 + a.1.1).partial_cmp(&(b.1.0 + b.1.1)).unwrap()).unwrap();
 
                 *mesh_resmut = best_resmut.clone();
                 println!("!!! Found best solution [score: {:?}, direction: {:?}, component: {:?}]", best_score, best_direction, best_component);
@@ -744,33 +745,35 @@ pub fn handle_events(
             }
             ActionEvent::RunAlgo => {
 
-                let number_of_samples = 300;
-                let number_of_candidates = 5;
-                let number_of_winners = 1;
-                let number_of_loops = 10;
+                let number_of_samples = 200;
+                let number_of_candidates = 10;
+                let number_of_winners = 2;
+                let number_of_loops = 5;
+                let number_of_removals = 5;
                 
                 let direction_choices = [PrincipalDirection::X, PrincipalDirection::Y, PrincipalDirection::Z];
                 let component_choices = [0, 1, 2];
                 let algo_choices = [LoopScoring::SingularitySeparationSpread, LoopScoring::SingularitySeparationSpread];
-                let path_weight_choices = 0.4..=0.6;
-                let gamma_choices = 2.5..15.0;
-                let singularity_choices = 2..=25;
+                let path_weight_choices = 1.0..=1.0;
+                let gamma_choices = 2.5..7.5;
+                let singularity_choices = 2..=20;
                 
                 let configuration_clone = configuration.clone();
                 let mut winners: Vec<MeshResource> = vec![mesh_resmut.clone(); number_of_winners];
 
                 for iteration in 0..configuration.algorithm_iterations {
 
-                    println!("!!! Iteration {:?}/{:?}", iteration, configuration.algorithm_iterations);
+                    println!("!!! Iteration {:?}/{:?}", iteration+1, configuration.algorithm_iterations);
 
                     let mut sols: Vec<_> = (0..number_of_candidates).into_par_iter().map(|i| {
+
                             let mut rand = rand::thread_rng();
 
                             let mut local_mesh_resmut = winners[rand.gen_range(0..number_of_winners)].clone();
 
                             let mut local_configuration = configuration_clone.clone();
 
-                            let mut local_score = f32::MAX;
+                            let mut local_score = (999., 999.);
 
                             for step in 0..number_of_loops {
                                 local_configuration.choose_direction = direction_choices[rand.gen_range(0..3)];
@@ -782,36 +785,43 @@ pub fn handle_events(
                                 local_configuration.algorithm_samples = number_of_samples;
 
                                 if let Some((new_sol, primalization)) = local_mesh_resmut.add_loop(&mut local_configuration) {
-                                    local_score = evaluate(&primalization).unwrap();   
-
+                                    
                                     local_mesh_resmut.sol = new_sol;
                                     local_mesh_resmut.primalization = primalization;
+                                    
                                 }
                             }
 
+                            local_score = evaluate(&local_mesh_resmut.primalization).unwrap();
+
+                            println!("!!! Candidate {:?}/{:?} phase 1/2 [{:?}]", i+1, number_of_candidates, local_score);
+
                             for dir in [PrincipalDirection::X, PrincipalDirection::Y, PrincipalDirection::Z].iter() {
-                                let paths = local_mesh_resmut.sol.paths.iter().enumerate().filter(|(id, p)| p.direction == *dir).map(|(id, p)| id).collect_vec();
+                                let mut paths = local_mesh_resmut.sol.paths.iter().enumerate().filter(|(id, p)| p.direction == *dir).map(|(id, p)| id).collect_vec();
                                 if paths.len() == 1 {
                                     continue;
                                 }
                                 
-                                for &path in paths.iter() {
+                                paths.shuffle(&mut rand);
+
+                                for &path in paths.iter().take(number_of_removals) {
                                     let mut local_mesh_resmut_copy = local_mesh_resmut.clone();
                                     let score = evaluate(&local_mesh_resmut_copy.primalization).unwrap();
-                                    if local_mesh_resmut_copy.remove_path(path, &mut configuration) {
+                                    if local_mesh_resmut_copy.remove_path(path, &mut local_configuration) {
                                         let new_score = evaluate(&local_mesh_resmut_copy.primalization).unwrap();
-                                        println!("!!! Score {:?} -> {:?} = {:?}", score, new_score, score - new_score);
                                         // if score increases by at most 1% we remove the loop
-                                        let percentual_change = (new_score - score) / score;
-                                        if percentual_change < 0.01 {
-                                            new_winner = local_mesh_resmut_copy;
-                                            println!("!!! Removed loop {:?}", path);
+                                        let percentual_change = ((new_score.0+new_score.1) - (score.0+score.1)) / (score.0+score.1);
+                                        if percentual_change < 0. {
+                                            local_mesh_resmut = local_mesh_resmut_copy;
+                                            local_score = new_score;
                                         }   
                                     }
                                 }
     
                                 
                             }
+
+                            println!("!!! Candidate {:?}/{:?} phase 2/2 [{:?}]", i+1, number_of_candidates, local_score);
 
                             Some((local_mesh_resmut, local_score))
                         
@@ -823,7 +833,7 @@ pub fn handle_events(
 
                     // get #number_of_winners best solutions
                     // sort the solutions
-                    sols.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                    sols.sort_by(|a, b| (a.1.0 + a.1.1).partial_cmp(&(b.1.0 + b.1.1)).unwrap());
 
                     let top_sols = sols.iter().take(number_of_winners).collect_vec();
                     
@@ -861,7 +871,7 @@ pub fn handle_events(
                     }
                 }
 
-                println!("new scorE: {:?}", evaluate(&mesh_resmut.primalization).unwrap());
+                println!("new score: {:?}", evaluate(&mesh_resmut.primalization).unwrap());
 
                 configuration.draw_loops = true;
                 configuration.draw_paths = false;               
@@ -890,28 +900,28 @@ pub fn handle_events(
             },
             ActionEvent::InitPrimalize => {
 
-                for dir in [PrincipalDirection::X, PrincipalDirection::Y, PrincipalDirection::Z].iter() {
-                    let paths = mesh_resmut.sol.paths.iter().enumerate().filter(|(id, p)| p.direction == *dir).map(|(id, p)| id).collect_vec();
-                    if paths.len() == 1 {
-                        continue;
-                    }
+                // for dir in [PrincipalDirection::X, PrincipalDirection::Y, PrincipalDirection::Z].iter() {
+                //     let paths = mesh_resmut.sol.paths.iter().enumerate().filter(|(id, p)| p.direction == *dir).map(|(id, p)| id).collect_vec();
+                //     if paths.len() == 1 {
+                //         continue;
+                //     }
                     
-                    for &path in paths.iter() {
-                        let mut mesh_resmut_copy = mesh_resmut.clone();
-                        let score = evaluate(&mesh_resmut_copy.primalization).unwrap();
-                        if mesh_resmut_copy.remove_path(path, &mut configuration) {
-                            let new_score = evaluate(&mesh_resmut_copy.primalization).unwrap();
-                            println!("!!! Score {:?} -> {:?} = {:?}", score, new_score, (new_score - score) / score);
-                            // if score increases by at most 1% we remove the loop
-                            let percentual_change = (new_score - score) / score;
-                            if percentual_change < 0.05 {
-                                *mesh_resmut = mesh_resmut_copy;
-                                println!("!!! Removed loop {:?}", path);
-                                return;
-                            }   
-                        }
-                    }
-                }
+                //     for &path in paths.iter() {
+                //         let mut mesh_resmut_copy = mesh_resmut.clone();
+                //         let score = evaluate(&mesh_resmut_copy.primalization).unwrap();
+                //         if mesh_resmut_copy.remove_path(path, &mut configuration) {
+                //             let new_score = evaluate(&mesh_resmut_copy.primalization).unwrap();
+                //             println!("!!! Score {:?} -> {:?} = {:?}", score, new_score, (new_score - score) / score);
+                //             // if score increases by at most 1% we remove the loop
+                //             let percentual_change = (new_score - score) / score;
+                //             if percentual_change < 0.05 {
+                //                 *mesh_resmut = mesh_resmut_copy;
+                //                 println!("!!! Removed loop {:?}", path);
+                //                 return;
+                //             }   
+                //         }
+                //     }
+                // }
 
             },
             ActionEvent::StepPrimalize => {

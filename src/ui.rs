@@ -49,12 +49,7 @@ pub fn ui(
 
 fn ui_software_info(ui: &mut Ui) {
     ui.vertical_centered(|ui| {
-        ui.label(
-            RichText::new("    pola viitdulo    ")
-                .strong()
-                .code()
-                .heading(),
-        );
+        ui.label(RichText::new("    pola dulo    ").strong().code().heading());
         ui.add_space(10.);
         ui.label(RichText::new("Polycube Layouts via Iterative Dual Loops"));
     });
@@ -133,113 +128,113 @@ fn ui_algorithm_info(
         ev_writer.send(ActionEvent::InitializeLoops);
     };
 
-    ui.add(egui::Slider::new(&mut configuration.algorithm_iterations, 1..=50).text("iterations"));
-    ui.add(egui::Slider::new(&mut configuration.algorithm_samples, 1..=2000).text("samples"));
-    ui.add(egui::Slider::new(&mut configuration.gamma, 1.0..=20.0).text("gamma"));
+    ui.add(egui::Slider::new(&mut configuration.algorithm_iterations, 1..=5).text("iterations"));
+    // ui.add(egui::Slider::new(&mut configuration.algorithm_samples, 1..=2000).text("samples"));
+    // ui.add(egui::Slider::new(&mut configuration.gamma, 1.0..=20.0).text("gamma"));
 
-    ui.add(
-        egui::Slider::new(&mut configuration.percent_singularities, 1..=100).text("%singularities"),
-    );
+    // ui.add(
+    //     egui::Slider::new(&mut configuration.percent_singularities, 1..=100).text("%singularities"),
+    // );
 
-    for loop_scoring in LoopScoring::iter() {
-        if ui
-            .radio(
-                configuration.loop_scoring_scheme == loop_scoring,
-                format!("{loop_scoring:?}"),
-            )
-            .clicked()
-        {
-            configuration.loop_scoring_scheme = loop_scoring;
-        }
-    }
+    // for loop_scoring in LoopScoring::iter() {
+    //     if ui
+    //         .radio(
+    //             configuration.loop_scoring_scheme == loop_scoring,
+    //             format!("{loop_scoring:?}"),
+    //         )
+    //         .clicked()
+    //     {
+    //         configuration.loop_scoring_scheme = loop_scoring;
+    //     }
+    // }
 
-    ui.add_space(5.);
+    // ui.add_space(5.);
+
+    // ui.horizontal(|ui| {
+    //     if ui.button("<<").clicked() {
+    //         configuration.choose_component -= 1;
+    //     };
+    //     ui.label(format!("  component {}  ", configuration.choose_component));
+    //     if ui.button(">>").clicked() {
+    //         configuration.choose_component += 1;
+    //     };
+    // });
+
+    // ui.checkbox(
+    //     &mut configuration.draw_next_component,
+    //     "view selected component",
+    // );
+
+    // ui.checkbox(&mut configuration.find_global, "find global");
+
+    // ui.add_space(5.);
+
+    // ui.horizontal(|ui| {
+    //     if ui.button("<<").clicked() {
+    //         configuration.remove_loop -= 1;
+    //     };
+    //     ui.label(format!("  loop {}  ", configuration.remove_loop));
+    //     if ui.button(">>").clicked() {
+    //         configuration.remove_loop += 1;
+    //     };
+    // });
+
+    // ui.checkbox(&mut configuration.view_selected_loop, "view selected loop");
+
+    // if ui.button("remove").clicked() {
+    //     ev_writer.send(ActionEvent::RemoveLoop);
+    // };
+
+    // ui.add_space(10.);
 
     ui.horizontal(|ui| {
-        if ui.button("<<").clicked() {
-            configuration.choose_component -= 1;
-        };
-        ui.label(format!("  component {}  ", configuration.choose_component));
-        if ui.button(">>").clicked() {
-            configuration.choose_component += 1;
-        };
-    });
-
-    ui.checkbox(
-        &mut configuration.draw_next_component,
-        "view selected component",
-    );
-
-    ui.checkbox(&mut configuration.find_global, "find global");
-
-    ui.add_space(5.);
-
-    ui.horizontal(|ui| {
-        if ui.button("<<").clicked() {
-            configuration.remove_loop -= 1;
-        };
-        ui.label(format!("  loop {}  ", configuration.remove_loop));
-        if ui.button(">>").clicked() {
-            configuration.remove_loop += 1;
-        };
-    });
-
-    ui.checkbox(&mut configuration.view_selected_loop, "view selected loop");
-
-    if ui.button("remove").clicked() {
-        ev_writer.send(ActionEvent::RemoveLoop);
-    };
-
-    ui.add_space(10.);
-
-    ui.horizontal(|ui| {
-        ui.label("Dual structure");
-        for principal_direction in PrincipalDirection::iter() {
-            if ui
-                .radio(
-                    configuration.choose_direction == principal_direction,
-                    format!("{principal_direction:?}"),
-                )
-                .clicked()
-            {
-                configuration.choose_direction = principal_direction;
-                configuration.choose_component = 0;
-            }
-        }
-        if ui.button("add").clicked() {
-            ev_writer.send(ActionEvent::AddLoop);
-        };
-        if ui.button("undo").clicked() {
-            ev_writer.send(ActionEvent::UndoLoop);
-        };
+        // ui.label("Dual structure");
+        // for principal_direction in PrincipalDirection::iter() {
+        //     if ui
+        //         .radio(
+        //             configuration.choose_direction == principal_direction,
+        //             format!("{principal_direction:?}"),
+        //         )
+        //         .clicked()
+        //     {
+        //         configuration.choose_direction = principal_direction;
+        //         configuration.choose_component = 0;
+        //     }
+        // }
+        // if ui.button("add").clicked() {
+        //     ev_writer.send(ActionEvent::AddLoop);
+        // };
+        // if ui.button("undo").clicked() {
+        //     ev_writer.send(ActionEvent::UndoLoop);
+        // };
         if ui.button("automatic").clicked() {
             ev_writer.send(ActionEvent::RunAlgo);
         };
     });
 
-    ui.add_space(10.);
+    // ui.add_space(10.);
 
-    ui.add(egui::Slider::new(&mut configuration.path_weight, 0.0..=1.0).text("path weight"));
+    // ui.add(egui::Slider::new(&mut configuration.path_weight, 0.0..=1.0).text("path weight"));
 
-    ui.horizontal(|ui| {
-        ui.label("Primalization embedding");
-        if ui.button("vertices").clicked() {
-            ev_writer.send(ActionEvent::PrimalizePlaceCenters);
-        };
-        if ui.button("edges").clicked() {
-            ev_writer.send(ActionEvent::PrimalizeConnectCenters);
-        };
-    });
+    // ui.horizontal(|ui| {
+    //     ui.label("Primalization embedding");
+    //     if ui.button("vertices").clicked() {
+    //         ev_writer.send(ActionEvent::PrimalizePlaceCenters);
+    //     };
+    //     if ui.button("edges").clicked() {
+    //         ev_writer.send(ActionEvent::PrimalizeConnectCenters);
+    //     };
+    // });
 
-    ui.horizontal(|ui| {
-        ui.label("Primalization embedding (NEW)");
-        if ui.button("init").clicked() {
-            ev_writer.send(ActionEvent::InitPrimalize);
-        };
-        if ui.button("step").clicked() {
-            ev_writer.send(ActionEvent::StepPrimalize);
-        };
-    });
+    // ui.horizontal(|ui| {
+    //     ui.label("Primalization embedding (NEW)");
+    //     if ui.button("init").clicked() {
+    //         ev_writer.send(ActionEvent::InitPrimalize);
+    //     };
+    //     if ui.button("step").clicked() {
+    //         ev_writer.send(ActionEvent::StepPrimalize);
+    //     };
+    // });
 
     ui.add_space(10.);
 }
@@ -272,7 +267,7 @@ fn ui_rendering_info(
     ui.horizontal(|ui| {
         ui.checkbox(&mut configuration.draw_wireframe, "input mesh");
         ui.checkbox(&mut configuration.draw_wireframe_alt, "granulated mesh");
-        ui.checkbox(&mut configuration.primal_w_graph, "primal w graph");
+        // ui.checkbox(&mut configuration.primal_w_graph, "primal w graph");
     });
 
     ui.horizontal(|ui| {
@@ -289,9 +284,9 @@ fn ui_rendering_info(
         mesh_resmut.as_mut();
     }
 
-    ui.add_space(10.);
-    ui.label("Debug");
-    ui.checkbox(&mut configuration.draw_debug_lines, "Debug lines");
+    // ui.add_space(10.);
+    // ui.label("Debug");
+    // ui.checkbox(&mut configuration.draw_debug_lines, "Debug lines");
 
     // ui.add_space(10.);
     // ui.label("Colors");

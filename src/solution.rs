@@ -195,8 +195,12 @@ impl Primalization {
                     })
                     .map(|partialface| average(partialface.bounding_points.iter().map(|x| x.0)));
 
-                region_to_labelcenters[region_id][label as usize] =
-                    (average(faces.clone()), faces.count());
+                if faces.clone().count() == 0 {
+                    region_to_labelcenters[region_id][label as usize] = (Vec3::splat(0.), 0);
+                } else {
+                    region_to_labelcenters[region_id][label as usize] =
+                        (average(faces.clone()), faces.count());
+                }
             }
 
             // only look at the top 3 labels
@@ -274,8 +278,8 @@ impl Primalization {
                     .map(|candidate| {
                         (
                             candidate,
-                            candidate.position.distance(region_to_target[region_id]) * 0.5
-                                + 0.5
+                            candidate.position.distance(region_to_target[region_id]) * 1.0
+                                + 0.0
                                     * ((region_to_labelcenters[region_id][0].1 as f32
                                         / all_faces_count as f32)
                                         * region_to_labelcenters[region_id][0]
@@ -1016,9 +1020,10 @@ impl Primalization {
     }
 }
 
-pub fn evaluate(primalization: &Primalization) -> Option<f32> {
-    let mut worst_patch_scores = vec![];
-    let mut avg_patch_scores = vec![];
+pub fn evaluate(primalization: &Primalization) -> Option<(f32, f32)> {
+    let mut face_to_alignment = vec![];
+    let mut face_to_flatness = vec![];
+    let mut face_to_area = vec![];
 
     for patch_id in 0..primalization.patch_graph.faces.len() {
         let surface = primalization.patch_to_surface[patch_id].clone().unwrap();
@@ -1047,33 +1052,11 @@ pub fn evaluate(primalization: &Primalization) -> Option<f32> {
                 .granulated_mesh
                 .get_area_of_face(subface.face_id);
             areas.push(area);
+
+            face_to_alignment.push(alignment_dev);
+            face_to_flatness.push(flatness_dev);
+            face_to_area.push(area);
         }
-
-        let max_flatness_dev = flatness_devs
-            .iter()
-            .cloned()
-            .fold(f32::NEG_INFINITY, f32::max);
-        let min_flatness_dev = flatness_devs.iter().cloned().fold(f32::INFINITY, f32::min);
-        let avg_flatness_dev = flatness_devs.iter().sum::<f32>() / flatness_devs.len() as f32;
-        let avg_flatness_dev_scaled = flatness_devs
-            .iter()
-            .zip(areas.iter())
-            .map(|(dev, area)| dev * area)
-            .sum::<f32>()
-            / areas.iter().sum::<f32>();
-
-        let max_alignment_dev = alignment_devs
-            .iter()
-            .cloned()
-            .fold(f32::NEG_INFINITY, f32::max);
-        let min_alignment_dev = alignment_devs.iter().cloned().fold(f32::INFINITY, f32::min);
-        let avg_alignment_dev = alignment_devs.iter().sum::<f32>() / alignment_devs.len() as f32;
-        let avg_alignment_dev_scaled = alignment_devs
-            .iter()
-            .zip(areas.iter())
-            .map(|(dev, area)| dev * area)
-            .sum::<f32>()
-            / areas.iter().sum::<f32>();
 
         // compute Jacobian of the patch
         let corners = primalization.patch_graph.get_vertices_of_face(patch_id);
@@ -1182,24 +1165,33 @@ pub fn evaluate(primalization: &Primalization) -> Option<f32> {
             let det_jacobian = det_jacobian(n, z, &quad);
             let scaled_det_jacobian = det_jacobian / ((length1 / 2.) * (length2 / 2.));
         }
-
-        worst_patch_scores.push(max_alignment_dev);
-        avg_patch_scores.push(avg_alignment_dev_scaled);
     }
 
-    let score = worst_patch_scores
-        .into_iter()
-        .max_by(|a, b| a.total_cmp(b))
-        .unwrap()
-        * 0.2
-        + utils::average(avg_patch_scores.into_iter());
+    let mut face_to_score = vec![];
+    let mut face_to_score_normalized = vec![];
+    for face_id in 0..face_to_alignment.len() {
+        let alignment = face_to_alignment[face_id];
+        let flatness = face_to_flatness[face_id];
+        let area = face_to_area[face_id];
+        face_to_score.push((alignment * 0.8 + flatness * 0.2));
+        face_to_score_normalized.push((alignment * 0.8 + flatness * 0.2) * area);
+    }
 
-    if score.is_nan() {
+    let avg_score = face_to_score_normalized.iter().sum::<f32>() / face_to_area.iter().sum::<f32>();
+
+    let worst_score = face_to_score
+        .iter()
+        .cloned()
+        .fold(f32::NEG_INFINITY, f32::max);
+
+    let total_score = avg_score + worst_score;
+
+    if total_score.is_nan() {
         println!("Failed to connect primal vertices [score]");
         return None;
     }
 
-    return Some(score);
+    return Some((avg_score, 0.));
 }
 
 // Derivatives of shape functions with respect to xi and eta
@@ -1241,7 +1233,9 @@ pub fn compute_average_normal(surface: &Surface, mesh: &Doconeli) -> Vec3 {
 }
 
 pub fn compute_deviation(face_id: usize, mesh: &Doconeli, vector: Vec3) -> f32 {
-    mesh.get_normal_of_face(face_id).angle_between(vector) / std::f32::consts::PI
+    (mesh.get_normal_of_face(face_id).angle_between(vector) / 2.)
+        .sin()
+        .powf(3.)
 }
 
 // Given a surface, and a vector, compute the average deviation of the normals of the faces to the vector
@@ -2022,7 +2016,7 @@ impl MeshResource {
                         let components_with_singularities = self.components_to_singularity_count(
                             components,
                             principal_direction,
-                            100,
+                            configuration.percent_singularities,
                         );
 
                         if components_with_singularities.len() != 2 {
