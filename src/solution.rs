@@ -1136,7 +1136,7 @@ pub fn evaluate(primalization: &Primalization) -> Option<(f32, f32)> {
         return None;
     }
 
-    return Some((face_avg_score, patch_avg_score));
+    return Some((face_avg_score, patch_avg_score * 0.1));
 }
 
 // Derivatives of shape functions with respect to xi and eta

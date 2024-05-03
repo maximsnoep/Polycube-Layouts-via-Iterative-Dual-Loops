@@ -691,6 +691,7 @@ pub fn handle_events(
                     let mut local_score = (f32::MAX, f32::MAX);
                     for direction in directions {
                         
+                        local_configuration.algorithm_samples = 200;
                         local_configuration.choose_direction = *direction;
                         local_configuration.choose_component = *component;
                         local_configuration.loop_scoring_scheme = loop_scoring;
@@ -746,13 +747,13 @@ pub fn handle_events(
             ActionEvent::RunAlgo => {
 
                 let number_of_samples = 200;
-                let number_of_candidates = 10;
+                let number_of_candidates = 5;
                 let number_of_winners = 2;
-                let number_of_loops = 3;
-                let number_of_removals = 3;
+                let number_of_loops = 10;
+                let number_of_removals = 10;
                 
                 let direction_choices = [PrincipalDirection::X, PrincipalDirection::Y, PrincipalDirection::Z];
-                let component_choices = [0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 2];
+                let component_choices = [0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 3, 4, 5, 6];
                 let algo_choices = [LoopScoring::SingularitySeparationSpread, LoopScoring::SingularitySeparationSpread];
                 let path_weight_choices = 1.0..=1.0;
                 let gamma_choices = 2.5..7.5;
@@ -801,8 +802,12 @@ pub fn handle_events(
                                 if paths.len() == 1 {
                                     continue;
                                 }
+
+                                let just_added_paths = paths.split_off(std::cmp::min(paths.len(), std::cmp::max(0, paths.len() - number_of_loops + 1)));
                                 
                                 paths.shuffle(&mut rand);
+                                paths = [just_added_paths, paths].concat();
+                                paths.reverse();
 
                                 for &path in paths.iter().take(number_of_removals) {
                                     let mut local_mesh_resmut_copy = local_mesh_resmut.clone();

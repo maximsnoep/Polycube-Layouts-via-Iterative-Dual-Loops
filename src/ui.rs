@@ -128,41 +128,41 @@ fn ui_algorithm_info(
         ev_writer.send(ActionEvent::InitializeLoops);
     };
 
-    // ui.add(egui::Slider::new(&mut configuration.algorithm_samples, 1..=2000).text("samples"));
-    // ui.add(egui::Slider::new(&mut configuration.gamma, 1.0..=20.0).text("gamma"));
+    ui.add(egui::Slider::new(&mut configuration.algorithm_samples, 1..=2000).text("samples"));
+    ui.add(egui::Slider::new(&mut configuration.gamma, 1.0..=20.0).text("gamma"));
 
-    // ui.add(
-    //     egui::Slider::new(&mut configuration.percent_singularities, 1..=100).text("%singularities"),
-    // );
+    ui.add(
+        egui::Slider::new(&mut configuration.percent_singularities, 1..=100).text("%singularities"),
+    );
 
-    // for loop_scoring in LoopScoring::iter() {
-    //     if ui
-    //         .radio(
-    //             configuration.loop_scoring_scheme == loop_scoring,
-    //             format!("{loop_scoring:?}"),
-    //         )
-    //         .clicked()
-    //     {
-    //         configuration.loop_scoring_scheme = loop_scoring;
-    //     }
-    // }
+    for loop_scoring in LoopScoring::iter() {
+        if ui
+            .radio(
+                configuration.loop_scoring_scheme == loop_scoring,
+                format!("{loop_scoring:?}"),
+            )
+            .clicked()
+        {
+            configuration.loop_scoring_scheme = loop_scoring;
+        }
+    }
 
-    // ui.add_space(5.);
+    ui.add_space(5.);
 
-    // ui.horizontal(|ui| {
-    //     if ui.button("<<").clicked() {
-    //         configuration.choose_component -= 1;
-    //     };
-    //     ui.label(format!("  component {}  ", configuration.choose_component));
-    //     if ui.button(">>").clicked() {
-    //         configuration.choose_component += 1;
-    //     };
-    // });
+    ui.horizontal(|ui| {
+        if ui.button("<<").clicked() {
+            configuration.choose_component -= 1;
+        };
+        ui.label(format!("  component {}  ", configuration.choose_component));
+        if ui.button(">>").clicked() {
+            configuration.choose_component += 1;
+        };
+    });
 
-    // ui.checkbox(
-    //     &mut configuration.draw_next_component,
-    //     "view selected component",
-    // );
+    ui.checkbox(
+        &mut configuration.draw_next_component,
+        "view selected component",
+    );
 
     // ui.checkbox(&mut configuration.find_global, "find global");
 
@@ -187,22 +187,22 @@ fn ui_algorithm_info(
     // ui.add_space(10.);
 
     ui.horizontal(|ui| {
-        // ui.label("Dual structure");
-        // for principal_direction in PrincipalDirection::iter() {
-        //     if ui
-        //         .radio(
-        //             configuration.choose_direction == principal_direction,
-        //             format!("{principal_direction:?}"),
-        //         )
-        //         .clicked()
-        //     {
-        //         configuration.choose_direction = principal_direction;
-        //         configuration.choose_component = 0;
-        //     }
-        // }
-        // if ui.button("add").clicked() {
-        //     ev_writer.send(ActionEvent::AddLoop);
-        // };
+        ui.label("Dual structure");
+        for principal_direction in PrincipalDirection::iter() {
+            if ui
+                .radio(
+                    configuration.choose_direction == principal_direction,
+                    format!("{principal_direction:?}"),
+                )
+                .clicked()
+            {
+                configuration.choose_direction = principal_direction;
+                configuration.choose_component = 0;
+            }
+        }
+        if ui.button("add").clicked() {
+            ev_writer.send(ActionEvent::AddLoop);
+        };
         // if ui.button("undo").clicked() {
         //     ev_writer.send(ActionEvent::UndoLoop);
         // };
