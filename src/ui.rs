@@ -124,11 +124,10 @@ fn ui_algorithm_info(
 
     ui.label("Algorithm");
 
-    if ui.button("re-init").clicked() {
+    if ui.button("initialize solution").clicked() {
         ev_writer.send(ActionEvent::InitializeLoops);
     };
 
-    ui.add(egui::Slider::new(&mut configuration.algorithm_iterations, 1..=5).text("iterations"));
     // ui.add(egui::Slider::new(&mut configuration.algorithm_samples, 1..=2000).text("samples"));
     // ui.add(egui::Slider::new(&mut configuration.gamma, 1.0..=20.0).text("gamma"));
 
@@ -207,10 +206,17 @@ fn ui_algorithm_info(
         // if ui.button("undo").clicked() {
         //     ev_writer.send(ActionEvent::UndoLoop);
         // };
-        if ui.button("automatic").clicked() {
+
+        if ui.button("iterate").clicked() {
             ev_writer.send(ActionEvent::RunAlgo);
         };
+
+        ui.add(egui::Slider::new(&mut configuration.algorithm_iterations, 1..=5).text("x"));
     });
+
+    if ui.button("clean loop structure").clicked() {
+        ev_writer.send(ActionEvent::InitPrimalize);
+    };
 
     // ui.add_space(10.);
 

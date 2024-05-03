@@ -1025,6 +1025,9 @@ pub fn evaluate(primalization: &Primalization) -> Option<(f32, f32)> {
     let mut face_to_flatness = vec![];
     let mut face_to_area = vec![];
 
+    let mut patch_to_rectangularity = vec![];
+    let mut patch_to_area = vec![];
+
     for patch_id in 0..primalization.patch_graph.faces.len() {
         let surface = primalization.patch_to_surface[patch_id].clone().unwrap();
         let dir = surface.direction;
@@ -1066,105 +1069,37 @@ pub fn evaluate(primalization: &Primalization) -> Option<(f32, f32)> {
             .collect_vec();
         assert!(corners.len() == 4);
 
-        let quad = match (surface.direction, positive < 0.) {
-            (Some(PrincipalDirection::X), false) => {
-                let mut m = Matrix4x2::zeros();
-                m[(0, 0)] = corner_positions[3].y;
-                m[(0, 1)] = corner_positions[3].z;
-                m[(1, 0)] = corner_positions[2].y;
-                m[(1, 1)] = corner_positions[2].z;
-                m[(2, 0)] = corner_positions[1].y;
-                m[(2, 1)] = corner_positions[1].z;
-                m[(3, 0)] = corner_positions[0].y;
-                m[(3, 1)] = corner_positions[0].z;
-                m
-            }
-            (Some(PrincipalDirection::Y), true) => {
-                let mut m = Matrix4x2::zeros();
-                m[(0, 0)] = corner_positions[3].x;
-                m[(0, 1)] = corner_positions[3].z;
-                m[(1, 0)] = corner_positions[2].x;
-                m[(1, 1)] = corner_positions[2].z;
-                m[(2, 0)] = corner_positions[1].x;
-                m[(2, 1)] = corner_positions[1].z;
-                m[(3, 0)] = corner_positions[0].x;
-                m[(3, 1)] = corner_positions[0].z;
-                m
-            }
-            (Some(PrincipalDirection::Z), false) => {
-                let mut m = Matrix4x2::zeros();
-                m[(0, 0)] = corner_positions[3].x;
-                m[(0, 1)] = corner_positions[3].y;
-                m[(1, 0)] = corner_positions[2].x;
-                m[(1, 1)] = corner_positions[2].y;
-                m[(2, 0)] = corner_positions[1].x;
-                m[(2, 1)] = corner_positions[1].y;
-                m[(3, 0)] = corner_positions[0].x;
-                m[(3, 1)] = corner_positions[0].y;
-                m
-            }
-            (Some(PrincipalDirection::X), true) => {
-                let mut m = Matrix4x2::zeros();
-                m[(0, 0)] = corner_positions[0].y;
-                m[(0, 1)] = corner_positions[0].z;
-                m[(1, 0)] = corner_positions[1].y;
-                m[(1, 1)] = corner_positions[1].z;
-                m[(2, 0)] = corner_positions[2].y;
-                m[(2, 1)] = corner_positions[2].z;
-                m[(3, 0)] = corner_positions[3].y;
-                m[(3, 1)] = corner_positions[3].z;
-                m
-            }
-            (Some(PrincipalDirection::Y), false) => {
-                let mut m = Matrix4x2::zeros();
-                m[(0, 0)] = corner_positions[0].x;
-                m[(0, 1)] = corner_positions[0].z;
-                m[(1, 0)] = corner_positions[1].x;
-                m[(1, 1)] = corner_positions[1].z;
-                m[(2, 0)] = corner_positions[2].x;
-                m[(2, 1)] = corner_positions[2].z;
-                m[(3, 0)] = corner_positions[3].x;
-                m[(3, 1)] = corner_positions[3].z;
-                m
-            }
-            (Some(PrincipalDirection::Z), true) => {
-                let mut m = Matrix4x2::zeros();
-                m[(0, 0)] = corner_positions[0].x;
-                m[(0, 1)] = corner_positions[0].y;
-                m[(1, 0)] = corner_positions[1].x;
-                m[(1, 1)] = corner_positions[1].y;
-                m[(2, 0)] = corner_positions[2].x;
-                m[(2, 1)] = corner_positions[2].y;
-                m[(3, 0)] = corner_positions[3].x;
-                m[(3, 1)] = corner_positions[3].y;
-                m
-            }
-            _ => Matrix4x2::from_vec(
-                corner_positions
-                    .iter()
-                    .map(|&pos| vec![0., 0.])
-                    .flatten()
-                    .collect(),
-            ),
-        };
+        // check whether corners make right (90 degree) angles
+        let corner0 = ((corner_positions[1] - corner_positions[0])
+            .angle_between(corner_positions[3] - corner_positions[0])
+            - std::f32::consts::FRAC_PI_2)
+            .sin()
+            .abs();
 
-        for (i, n, z) in [(0, -1., -1.), (1, 1., -1.), (2, 1., 1.), (3, -1., 1.)] {
-            // get distance (length) between p1 and p2
-            let length1 = Vec2::from([quad.row(i)[0], quad.row(i)[1]]).distance(Vec2::from([
-                quad.row((i - 1) % 4)[0],
-                quad.row((i - 1) % 4)[1],
-            ]));
+        let corner1 = ((corner_positions[2] - corner_positions[1])
+            .angle_between(corner_positions[0] - corner_positions[1])
+            - std::f32::consts::FRAC_PI_2)
+            .sin()
+            .abs();
 
-            // get distance (length) between p2 and p3
-            let length2 = Vec2::from([quad.row(i)[0], quad.row(i)[1]]).distance(Vec2::from([
-                quad.row((i + 1) % 4)[0],
-                quad.row((i + 1) % 4)[1],
-            ]));
+        let corner2 = ((corner_positions[3] - corner_positions[2])
+            .angle_between(corner_positions[1] - corner_positions[2])
+            - std::f32::consts::FRAC_PI_2)
+            .sin()
+            .abs();
 
-            let jacobian = jacobian(n, z, &quad);
-            let det_jacobian = det_jacobian(n, z, &quad);
-            let scaled_det_jacobian = det_jacobian / ((length1 / 2.) * (length2 / 2.));
-        }
+        let corner3 = ((corner_positions[0] - corner_positions[3])
+            .angle_between(corner_positions[2] - corner_positions[3])
+            - std::f32::consts::FRAC_PI_2)
+            .sin()
+            .abs();
+
+        let rectangularity = (corner0 + corner1 + corner2 + corner3) / 4.;
+
+        let surface_area = areas.iter().sum::<f32>();
+
+        patch_to_rectangularity.push(rectangularity);
+        patch_to_area.push(surface_area);
     }
 
     let mut face_to_score = vec![];
@@ -1173,25 +1108,35 @@ pub fn evaluate(primalization: &Primalization) -> Option<(f32, f32)> {
         let alignment = face_to_alignment[face_id];
         let flatness = face_to_flatness[face_id];
         let area = face_to_area[face_id];
-        face_to_score.push((alignment * 0.8 + flatness * 0.2));
-        face_to_score_normalized.push((alignment * 0.8 + flatness * 0.2) * area);
+
+        face_to_score.push((alignment * 1.0 + flatness * 0.0));
+        face_to_score_normalized.push((alignment * 1.0 + flatness * 0.0) * area);
     }
 
-    let avg_score = face_to_score_normalized.iter().sum::<f32>() / face_to_area.iter().sum::<f32>();
+    let face_avg_score =
+        face_to_score_normalized.iter().sum::<f32>() / face_to_area.iter().sum::<f32>();
 
-    let worst_score = face_to_score
-        .iter()
-        .cloned()
-        .fold(f32::NEG_INFINITY, f32::max);
+    let mut patch_to_score = vec![];
+    let mut patch_to_score_normalized = vec![];
+    for patch_id in 0..patch_to_area.len() {
+        let area = patch_to_area[patch_id];
+        let rectangularity = patch_to_rectangularity[patch_id];
 
-    let total_score = avg_score + worst_score;
+        patch_to_score.push(rectangularity);
+        patch_to_score_normalized.push(rectangularity * area);
+    }
+
+    let patch_avg_score =
+        patch_to_score_normalized.iter().sum::<f32>() / patch_to_area.iter().sum::<f32>();
+
+    let total_score = face_avg_score + patch_avg_score;
 
     if total_score.is_nan() {
         println!("Failed to connect primal vertices [score]");
         return None;
     }
 
-    return Some((avg_score, 0.));
+    return Some((face_avg_score, patch_avg_score));
 }
 
 // Derivatives of shape functions with respect to xi and eta
@@ -1235,7 +1180,7 @@ pub fn compute_average_normal(surface: &Surface, mesh: &Doconeli) -> Vec3 {
 pub fn compute_deviation(face_id: usize, mesh: &Doconeli, vector: Vec3) -> f32 {
     (mesh.get_normal_of_face(face_id).angle_between(vector) / 2.)
         .sin()
-        .powf(3.)
+        .powf(4.)
 }
 
 // Given a surface, and a vector, compute the average deviation of the normals of the faces to the vector

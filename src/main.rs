@@ -748,11 +748,11 @@ pub fn handle_events(
                 let number_of_samples = 200;
                 let number_of_candidates = 10;
                 let number_of_winners = 2;
-                let number_of_loops = 5;
-                let number_of_removals = 5;
+                let number_of_loops = 3;
+                let number_of_removals = 3;
                 
                 let direction_choices = [PrincipalDirection::X, PrincipalDirection::Y, PrincipalDirection::Z];
-                let component_choices = [0, 1, 2];
+                let component_choices = [0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 2];
                 let algo_choices = [LoopScoring::SingularitySeparationSpread, LoopScoring::SingularitySeparationSpread];
                 let path_weight_choices = 1.0..=1.0;
                 let gamma_choices = 2.5..7.5;
@@ -777,8 +777,8 @@ pub fn handle_events(
 
                             for step in 0..number_of_loops {
                                 local_configuration.choose_direction = direction_choices[rand.gen_range(0..3)];
-                                local_configuration.choose_component = component_choices[rand.gen_range(0..3)];
-                                local_configuration.loop_scoring_scheme = algo_choices[rand.gen_range(0..2)];
+                                local_configuration.choose_component = component_choices[rand.gen_range(0..component_choices.len())];
+                                local_configuration.loop_scoring_scheme = algo_choices[rand.gen_range(0..algo_choices.len())];
                                 local_configuration.path_weight = rand.gen_range(path_weight_choices.clone());
                                 local_configuration.gamma = rand.gen_range(gamma_choices.clone());
                                 local_configuration.percent_singularities = rand.gen_range(singularity_choices.clone());
@@ -900,28 +900,28 @@ pub fn handle_events(
             },
             ActionEvent::InitPrimalize => {
 
-                // for dir in [PrincipalDirection::X, PrincipalDirection::Y, PrincipalDirection::Z].iter() {
-                //     let paths = mesh_resmut.sol.paths.iter().enumerate().filter(|(id, p)| p.direction == *dir).map(|(id, p)| id).collect_vec();
-                //     if paths.len() == 1 {
-                //         continue;
-                //     }
+                for dir in [PrincipalDirection::X, PrincipalDirection::Y, PrincipalDirection::Z].iter() {
+                    let paths = mesh_resmut.sol.paths.iter().enumerate().filter(|(id, p)| p.direction == *dir).map(|(id, p)| id).collect_vec();
+                    if paths.len() == 1 {
+                        continue;
+                    }
                     
-                //     for &path in paths.iter() {
-                //         let mut mesh_resmut_copy = mesh_resmut.clone();
-                //         let score = evaluate(&mesh_resmut_copy.primalization).unwrap();
-                //         if mesh_resmut_copy.remove_path(path, &mut configuration) {
-                //             let new_score = evaluate(&mesh_resmut_copy.primalization).unwrap();
-                //             println!("!!! Score {:?} -> {:?} = {:?}", score, new_score, (new_score - score) / score);
-                //             // if score increases by at most 1% we remove the loop
-                //             let percentual_change = (new_score - score) / score;
-                //             if percentual_change < 0.05 {
-                //                 *mesh_resmut = mesh_resmut_copy;
-                //                 println!("!!! Removed loop {:?}", path);
-                //                 return;
-                //             }   
-                //         }
-                //     }
-                // }
+                    for &path in paths.iter() {
+                        let mut mesh_resmut_copy = mesh_resmut.clone();
+                        let score = evaluate(&mesh_resmut_copy.primalization).unwrap();
+                        if mesh_resmut_copy.remove_path(path, &mut configuration) {
+                            let new_score = evaluate(&mesh_resmut_copy.primalization).unwrap();
+                            println!("!!! Score {:?} -> {:?} = {:?}", score, new_score, ((new_score.0+new_score.1) - (score.0+score.1)) / (score.0+score.1));
+                            // if score increases by at most 1% we remove the loop
+                            let percentual_change = ((new_score.0+new_score.1) - (score.0+score.1)) / (score.0+score.1);
+                            if percentual_change < 0. {
+                                println!("!!! Picked up solution.");
+                                *mesh_resmut = mesh_resmut_copy;
+                                return;
+                            }   
+                        }
+                    }
+                }
 
             },
             ActionEvent::StepPrimalize => {
