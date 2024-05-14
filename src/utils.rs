@@ -1,9 +1,6 @@
 use crate::{
     doconeli::Doconeli,
-    solution::{
-        compute_average_normal, compute_deviation, det_jacobian, jacobian, PrincipalDirection,
-        Surface,
-    },
+    solution::{Evaluation, PrincipalDirection, Surface},
     ColorType, Configuration,
 };
 use bevy::{
@@ -12,7 +9,6 @@ use bevy::{
     utils::Instant,
 };
 use itertools::Itertools;
-use nalgebra::Matrix4x2;
 use rand::Rng;
 use std::error::Error;
 use std::io::Write;
@@ -67,7 +63,7 @@ impl Timer {
     }
 
     pub fn report(&self, note: &str) {
-        //info!("{:>12?}  >  {note}", self.start.elapsed());
+        // info!("{:>12?}  >  {note}", self.start.elapsed());
     }
 }
 
@@ -449,6 +445,7 @@ pub fn get_bevy_mesh_of_regions(
     granulated_mesh: &Doconeli,
     color_type: ColorType,
     configuration: &Configuration,
+    evaluation: &Evaluation,
 ) -> Mesh {
     let mut mesh_triangle_list = Mesh::new(PrimitiveTopology::TriangleList);
     let mut vertex_positions = vec![];
@@ -466,192 +463,20 @@ pub fn get_bevy_mesh_of_regions(
             _ => Color::PINK,
         };
 
-        let mut areas = vec![];
-        let mut alignment_devs = vec![];
-        let mut flatness_devs = vec![];
-
-        if color_type == ColorType::DistortionAlignment {
-            // direction is negative or positive based on angle with average normal
-            let avg_normal = compute_average_normal(&surface, &granulated_mesh);
-            let positive = surface
-                .direction
-                .unwrap()
-                .to_vector()
-                .dot(avg_normal)
-                .signum();
-            let direction = surface.direction.unwrap().to_vector() * positive;
-
-            for subface in &surface.faces {
-                let alignment_dev = compute_deviation(subface.face_id, &granulated_mesh, direction);
-                alignment_devs.push(alignment_dev);
-
-                let area = granulated_mesh.get_area_of_face(subface.face_id);
-                areas.push(area);
-            }
-        }
-
-        if color_type == ColorType::DistortionFlatness {
-            // compute avg normal of the surface
-            let avg_normal = compute_average_normal(&surface, &granulated_mesh);
-            for subface in &surface.faces {
-                let flatness_dev = compute_deviation(subface.face_id, &granulated_mesh, avg_normal);
-                flatness_devs.push(flatness_dev);
-
-                let area = granulated_mesh.get_area_of_face(subface.face_id);
-                areas.push(area);
-            }
-        }
-
-        let mut det_j = 0.;
-        if color_type == ColorType::DistortionJacobian {
-            let avg_normal = compute_average_normal(&surface, &granulated_mesh);
-
-            let positive = surface
-                .direction
-                .unwrap()
-                .to_vector()
-                .dot(avg_normal)
-                .signum();
-
-            let corners = patch_graph.get_vertices_of_face(surface.id);
-            let corner_positions = corners
-                .iter()
-                .map(|&vertex_id| patch_graph.vertices[vertex_id].position)
-                .collect_vec();
-            assert!(corners.len() == 4);
-
-            let quad = match (surface.direction, positive < 0.) {
-                (Some(PrincipalDirection::X), false) => {
-                    let mut m = Matrix4x2::zeros();
-                    m[(0, 0)] = corner_positions[3].y;
-                    m[(0, 1)] = corner_positions[3].z;
-                    m[(1, 0)] = corner_positions[2].y;
-                    m[(1, 1)] = corner_positions[2].z;
-                    m[(2, 0)] = corner_positions[1].y;
-                    m[(2, 1)] = corner_positions[1].z;
-                    m[(3, 0)] = corner_positions[0].y;
-                    m[(3, 1)] = corner_positions[0].z;
-                    m
-                }
-                (Some(PrincipalDirection::Y), true) => {
-                    let mut m = Matrix4x2::zeros();
-                    m[(0, 0)] = corner_positions[3].x;
-                    m[(0, 1)] = corner_positions[3].z;
-                    m[(1, 0)] = corner_positions[2].x;
-                    m[(1, 1)] = corner_positions[2].z;
-                    m[(2, 0)] = corner_positions[1].x;
-                    m[(2, 1)] = corner_positions[1].z;
-                    m[(3, 0)] = corner_positions[0].x;
-                    m[(3, 1)] = corner_positions[0].z;
-                    m
-                }
-                (Some(PrincipalDirection::Z), false) => {
-                    let mut m = Matrix4x2::zeros();
-                    m[(0, 0)] = corner_positions[3].x;
-                    m[(0, 1)] = corner_positions[3].y;
-                    m[(1, 0)] = corner_positions[2].x;
-                    m[(1, 1)] = corner_positions[2].y;
-                    m[(2, 0)] = corner_positions[1].x;
-                    m[(2, 1)] = corner_positions[1].y;
-                    m[(3, 0)] = corner_positions[0].x;
-                    m[(3, 1)] = corner_positions[0].y;
-                    m
-                }
-                (Some(PrincipalDirection::X), true) => {
-                    let mut m = Matrix4x2::zeros();
-                    m[(0, 0)] = corner_positions[0].y;
-                    m[(0, 1)] = corner_positions[0].z;
-                    m[(1, 0)] = corner_positions[1].y;
-                    m[(1, 1)] = corner_positions[1].z;
-                    m[(2, 0)] = corner_positions[2].y;
-                    m[(2, 1)] = corner_positions[2].z;
-                    m[(3, 0)] = corner_positions[3].y;
-                    m[(3, 1)] = corner_positions[3].z;
-                    m
-                }
-                (Some(PrincipalDirection::Y), false) => {
-                    let mut m = Matrix4x2::zeros();
-                    m[(0, 0)] = corner_positions[0].x;
-                    m[(0, 1)] = corner_positions[0].z;
-                    m[(1, 0)] = corner_positions[1].x;
-                    m[(1, 1)] = corner_positions[1].z;
-                    m[(2, 0)] = corner_positions[2].x;
-                    m[(2, 1)] = corner_positions[2].z;
-                    m[(3, 0)] = corner_positions[3].x;
-                    m[(3, 1)] = corner_positions[3].z;
-                    m
-                }
-                (Some(PrincipalDirection::Z), true) => {
-                    let mut m = Matrix4x2::zeros();
-                    m[(0, 0)] = corner_positions[0].x;
-                    m[(0, 1)] = corner_positions[0].y;
-                    m[(1, 0)] = corner_positions[1].x;
-                    m[(1, 1)] = corner_positions[1].y;
-                    m[(2, 0)] = corner_positions[2].x;
-                    m[(2, 1)] = corner_positions[2].y;
-                    m[(3, 0)] = corner_positions[3].x;
-                    m[(3, 1)] = corner_positions[3].y;
-                    m
-                }
-                _ => Matrix4x2::from_vec(
-                    corner_positions
-                        .iter()
-                        .map(|&pos| vec![0., 0.])
-                        .flatten()
-                        .collect(),
-                ),
-            };
-
-            let mut min = f32::MAX;
-
-            for (i, n, z) in [(0, -1., -1.), (1, 1., -1.), (2, 1., 1.), (3, -1., 1.)] {
-                // get distance (length) between p1 and p2
-                let length1 = Vec2::from([quad.row(i)[0], quad.row(i)[1]]).distance(Vec2::from([
-                    quad.row((i - 1) % 4)[0],
-                    quad.row((i - 1) % 4)[1],
-                ]));
-
-                // get distance (length) between p2 and p3
-                let length2 = Vec2::from([quad.row(i)[0], quad.row(i)[1]]).distance(Vec2::from([
-                    quad.row((i + 1) % 4)[0],
-                    quad.row((i + 1) % 4)[1],
-                ]));
-
-                let jacobian = jacobian(n, z, &quad);
-                let det_jacobian = det_jacobian(n, z, &quad);
-                let scaled_det_jacobian = det_jacobian / ((length1 / 2.) * (length2 / 2.));
-
-                if scaled_det_jacobian < min {
-                    min = scaled_det_jacobian;
-                }
-            }
-
-            det_j = min;
-        }
-
         let mut color_f32 = color.as_rgba_f32();
 
         for (i, subface) in surface.faces.iter().enumerate() {
             if color_type == ColorType::DistortionAlignment {
-                let alignment_dev = alignment_devs[i];
-
-                color_f32 = color_map(alignment_dev, MAGMA.to_vec()).as_rgba_f32();
-            }
-            if color_type == ColorType::DistortionFlatness {
-                let flatness_dev = flatness_devs[i];
-
-                color_f32 = color_map(flatness_dev, MAGMA.to_vec()).as_rgba_f32();
+                color_f32 = color_map(
+                    evaluation.face_to_fidelity[&subface.face_id],
+                    MAGMA.to_vec(),
+                )
+                .as_rgba_f32();
             }
             if color_type == ColorType::DistortionJacobian {
-                let det_j = det_j;
-
-                color_f32 = color_map(1.0 - det_j, MAGMA.to_vec()).as_rgba_f32();
-
-                if det_j <= 0. {
-                    color_f32 = Color::RED.as_rgba_f32();
-                }
+                color_f32 =
+                    color_map(evaluation.patch_to_angle[&surface.id], MAGMA.to_vec()).as_rgba_f32();
             }
-
             for &p1 in &subface.bounding_points {
                 for &p2 in &subface.bounding_points {
                     for &p3 in &subface.bounding_points {
@@ -881,14 +706,4 @@ pub fn point_lies_in_segment(point: Vec3, segment: (Vec3, Vec3)) -> bool {
     let segment_length_through_point = point.distance(segment.0) + point.distance(segment.1);
 
     return (segment_length - segment_length_through_point).abs() < 0.00001;
-}
-
-pub fn score_normal_based_on_orientation(normal: Vec3, orientation: PrincipalDirection) -> i32 {
-    let orientation_vec = orientation.to_vector();
-    let orientation_vec_neg = -orientation_vec;
-
-    std::cmp::min(
-        normal.angle_between(orientation_vec).to_degrees() as i32,
-        normal.angle_between(orientation_vec_neg).to_degrees() as i32,
-    )
 }

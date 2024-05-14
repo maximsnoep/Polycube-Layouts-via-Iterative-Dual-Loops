@@ -34,7 +34,47 @@ pub struct MeshResource {
     pub primalization: Primalization,
     pub primalization2: Primalization,
 
+    pub evaluation: Evaluation,
+
     pub graphs: [Mipoga; 3],
+}
+
+#[derive(Default, Clone, Resource, Debug, Serialize, Deserialize)]
+pub struct Evaluation {
+    pub face_to_area: HashMap<usize, f32>,
+    pub face_to_fidelity: HashMap<usize, f32>,
+    pub patch_to_area: HashMap<usize, f32>,
+    pub patch_to_angle: HashMap<usize, f32>,
+}
+
+impl Evaluation {
+    pub fn get_score(&self) -> f32 {
+        let mut face_to_fidelity_normalized = vec![];
+        for face_id in 0..self.face_to_fidelity.len() {
+            face_to_fidelity_normalized
+                .push(self.face_to_fidelity[&face_id] * self.face_to_area[&face_id]);
+        }
+
+        let face_avg_score = face_to_fidelity_normalized.iter().sum::<f32>()
+            / self.face_to_area.values().sum::<f32>();
+
+        let mut patch_to_angle_normalized = vec![];
+        for patch_id in 0..self.patch_to_angle.len() {
+            patch_to_angle_normalized
+                .push(self.patch_to_angle[&patch_id] * self.patch_to_area[&patch_id]);
+        }
+
+        let patch_avg_score = patch_to_angle_normalized.iter().sum::<f32>()
+            / self.patch_to_area.values().sum::<f32>();
+
+        let total_score = 0.9 * face_avg_score + 0.1 * patch_avg_score;
+
+        if total_score.is_nan() {
+            return f32::MAX;
+        }
+
+        total_score
+    }
 }
 
 #[derive(Default, Clone, EnumIter, PartialEq, Eq, Debug, Serialize, Deserialize, Copy)]
@@ -227,23 +267,6 @@ impl Primalization {
             // Get all connected components after removing the edges
             let components = graph.connected_components();
 
-            // Find average coordinate for the regions inside 1 component (for `dir` coordinate component, so 1 value, not a 3-d position)
-            // for component in components {
-            //     let average_point = average(
-            //         component
-            //             .iter()
-            //             .map(|&region_id| &region_to_candidates[region_id])
-            //             .flatten()
-            //             .map(|candidate| {
-            //                 vec![candidate.position[filtered_direction as usize]; candidate.weight]
-            //             })
-            //             .flatten(),
-            //     );
-            //     for region_id in component {
-            //         region_to_target[region_id][filtered_direction as usize] = average_point;
-            //     }
-            // }
-
             for component in components {
                 let average_point = average(component.iter().map(|&region_id| {
                     let all_faces_count = region_to_labelcenters[region_id][0].1
@@ -268,33 +291,13 @@ impl Primalization {
 
         // Find the best candidate for each region, based on minimizing distance to the set target per region
         for region_id in 0..self.dual.regions.len() {
-            let all_faces_count = region_to_labelcenters[region_id][0].1
-                + region_to_labelcenters[region_id][1].1
-                + region_to_labelcenters[region_id][2].1;
-
             self.region_to_primal[region_id] = Some(
                 region_to_candidates[region_id]
                     .iter()
                     .map(|candidate| {
                         (
                             candidate,
-                            candidate.position.distance(region_to_target[region_id]) * 1.0
-                                + 0.0
-                                    * ((region_to_labelcenters[region_id][0].1 as f32
-                                        / all_faces_count as f32)
-                                        * region_to_labelcenters[region_id][0]
-                                            .0
-                                            .distance(candidate.position)
-                                        + (region_to_labelcenters[region_id][1].1 as f32
-                                            / all_faces_count as f32)
-                                            * region_to_labelcenters[region_id][1]
-                                                .0
-                                                .distance(candidate.position)
-                                        + (region_to_labelcenters[region_id][2].1 as f32
-                                            / all_faces_count as f32)
-                                            * region_to_labelcenters[region_id][2]
-                                                .0
-                                                .distance(candidate.position)),
+                            candidate.position.distance(region_to_target[region_id]),
                         )
                     })
                     .min_by(|(_, c1_dist), (_, c2_dist)| c1_dist.total_cmp(&c2_dist))
@@ -559,84 +562,6 @@ impl Primalization {
 
             // Find path for each pair
             for pair_id in 0..region_pairs.len() {
-                for face in 0..self.granulated_mesh.faces.len() {
-                    let normal = self.granulated_mesh.get_normal_of_face(face);
-
-                    // find the best label (direction), based on smallest angle with normal of face
-                    let best_label = [
-                        (PrincipalDirection::X, 1.0),
-                        (PrincipalDirection::X, -1.0),
-                        (PrincipalDirection::Y, 1.0),
-                        (PrincipalDirection::Y, -1.0),
-                        (PrincipalDirection::Z, 1.0),
-                        (PrincipalDirection::Z, -1.0),
-                    ]
-                    .iter()
-                    .map(|x| (x, normal.angle_between(x.1 * x.0.to_vector())))
-                    .collect_vec()
-                    .into_iter()
-                    .min_by(|x, y| x.1.partial_cmp(&y.1).unwrap())
-                    .unwrap();
-
-                    let label = match best_label.0 {
-                        (PrincipalDirection::X, 1.0) => 0,
-                        (PrincipalDirection::X, -1.0) => 1,
-                        (PrincipalDirection::Y, 1.0) => 2,
-                        (PrincipalDirection::Y, -1.0) => 3,
-                        (PrincipalDirection::Z, 1.0) => 4,
-                        (PrincipalDirection::Z, -1.0) => 5,
-                        _ => 999,
-                    };
-
-                    self.granulated_mesh.faces[face].label = Some(label);
-                }
-
-                // for each edge in mesh, color each edge depending on the two adjacent faces
-                for edge in 0..self.granulated_mesh.edges.len() {
-                    let (face_1, face_2) = self.granulated_mesh.get_faces_of_edge(edge);
-                    let label_1 = self.granulated_mesh.faces[face_1].label.unwrap();
-                    let label_2 = self.granulated_mesh.faces[face_2].label.unwrap();
-
-                    self.granulated_mesh.edges[edge].face_labels = Some((label_1, label_2));
-                }
-
-                let mut face_labels = HashMap::new();
-                let mut edge_labels = HashMap::new();
-                for face_id in 0..self.granulated_mesh.faces.len() {
-                    let label = self.granulated_mesh.faces[face_id].label.unwrap();
-                    let real_label = match label {
-                        0 => 0,
-                        1 => 0,
-                        2 => 1,
-                        3 => 1,
-                        4 => 2,
-                        5 => 2,
-                        _ => 999,
-                    };
-                    face_labels.insert(face_id, real_label);
-                }
-                for edge_id in 0..self.granulated_mesh.edges.len() {
-                    let labels = self.granulated_mesh.edges[edge_id].face_labels.unwrap();
-                    let real_labels: (usize, usize) = [labels.0, labels.1]
-                        .iter()
-                        .map(|&label| match label {
-                            0 => 0,
-                            1 => 0,
-                            2 => 1,
-                            3 => 1,
-                            4 => 2,
-                            5 => 2,
-                            _ => 999,
-                        })
-                        .collect_tuple()
-                        .unwrap();
-
-                    edge_labels.insert(
-                        self.granulated_mesh.get_endpoints_of_edge(edge_id),
-                        real_labels,
-                    );
-                }
-
                 let (_, original_edge_id) = region_pairs[pair_id];
 
                 let (region_u, region_v) = self.patch_graph.get_endpoints_of_edge(original_edge_id);
@@ -675,40 +600,63 @@ impl Primalization {
 
                 // Block all vertices that are not in the current region
                 // Basically just keep everything in the current regions
-                // let mut faces_to_keep = HashSet::new();
-                // for face_id in self.dual.regions[region_u]
-                //     .faces
-                //     .iter()
-                //     .chain(self.dual.regions[region_v].faces.iter())
-                //     .map(|subface| subface.face_id)
-                // {
-                //     faces_to_keep.insert(face_id);
+                let mut faces_to_keep = HashSet::new();
 
-                //     self.face_to_splitted[face_id]
-                //         .iter()
-                //         .for_each(|&splitface_id| {
-                //             faces_to_keep.insert(splitface_id);
-                //         });
-                // }
+                // get neighbor regions of region_u
+                let neighbors_u = self.patch_graph.get_neighbors_of_vertex(region_u);
+                // get neighbor regions of region_v
+                let neighbors_v = self.patch_graph.get_neighbors_of_vertex(region_v);
 
-                // let mut vertices_to_keep = HashSet::new();
-                // for &face_id in &faces_to_keep {
-                //     for vertex_id in self.granulated_mesh.get_vertices_of_face(face_id) {
-                //         vertices_to_keep.insert(vertex_id);
-                //     }
-                // }
+                // get the faces of the regions
+                for region_id in neighbors_u.iter().chain(neighbors_v.iter()) {
+                    for face_id in self.dual.regions[*region_id]
+                        .faces
+                        .iter()
+                        .map(|subface| subface.face_id)
+                    {
+                        faces_to_keep.insert(face_id);
 
-                // for face_id in 0..self.granulated_mesh.faces.len() {
-                //     if !faces_to_keep.contains(&face_id) {
-                //         remove_vertices.insert(self.granulated_mesh.vertices.len() + face_id);
+                        self.face_to_splitted[face_id]
+                            .iter()
+                            .for_each(|&splitface_id| {
+                                faces_to_keep.insert(splitface_id);
+                            });
+                    }
+                }
 
-                //         for vertex_id in self.granulated_mesh.get_vertices_of_face(face_id) {
-                //             // if !vertices_to_keep.contains(&vertex_id) {
-                //             remove_vertices.insert(vertex_id);
-                //             // }
-                //         }
-                //     }
-                // }
+                for face_id in self.dual.regions[region_u]
+                    .faces
+                    .iter()
+                    .chain(self.dual.regions[region_v].faces.iter())
+                    .map(|subface| subface.face_id)
+                {
+                    faces_to_keep.insert(face_id);
+
+                    self.face_to_splitted[face_id]
+                        .iter()
+                        .for_each(|&splitface_id| {
+                            faces_to_keep.insert(splitface_id);
+                        });
+                }
+
+                let mut vertices_to_keep = HashSet::new();
+                for &face_id in &faces_to_keep {
+                    for vertex_id in self.granulated_mesh.get_vertices_of_face(face_id) {
+                        vertices_to_keep.insert(vertex_id);
+                    }
+                }
+
+                for face_id in 0..self.granulated_mesh.faces.len() {
+                    if !faces_to_keep.contains(&face_id) {
+                        remove_vertices.insert(self.granulated_mesh.vertices.len() + face_id);
+
+                        for vertex_id in self.granulated_mesh.get_vertices_of_face(face_id) {
+                            // if !vertices_to_keep.contains(&vertex_id) {
+                            remove_vertices.insert(vertex_id);
+                            // }
+                        }
+                    }
+                }
 
                 // Actually find the path
                 if let PrimalVertexType::Vertex(primal_u) =
@@ -739,56 +687,7 @@ impl Primalization {
                                 == &region_v
                         );
 
-                        let edge_between_regions = self
-                            .dual
-                            .intersection_graph
-                            .get_edge_of_face_and_face(region_u, region_v)
-                            .unwrap();
-
-                        let (intersection_a, intersection_b) = self
-                            .dual
-                            .intersection_graph
-                            .get_endpoints_of_edge(edge_between_regions);
-
-                        let intersection_a_labels = self.dual.intersection_graph.vertices
-                            [intersection_a]
-                            .ordering
-                            .iter()
-                            .map(|(label, _)| label.to_owned())
-                            .collect::<HashSet<_>>();
-
-                        let all_directions = [0, 1, 2];
-
-                        // direction of an intersection is the third label that is missing
-                        let intersection_a_direction = intersection_a_labels
-                            .symmetric_difference(&all_directions.iter().cloned().collect())
-                            .next()
-                            .unwrap()
-                            .to_owned();
-
-                        let intersection_b_labels = self.dual.intersection_graph.vertices
-                            [intersection_b]
-                            .ordering
-                            .iter()
-                            .map(|(label, _)| label.to_owned())
-                            .collect::<HashSet<_>>();
-
-                        let intersection_b_direction = intersection_b_labels
-                            .symmetric_difference(&all_directions.iter().cloned().collect())
-                            .next()
-                            .unwrap()
-                            .to_owned();
-
-                        let target_labels = (intersection_a_direction, intersection_b_direction);
-
-                        ggg.precompute_label_weights(
-                            &configuration,
-                            target_labels,
-                            face_labels.clone(),
-                            edge_labels.clone(),
-                        );
-
-                        configuration.last_primal_w_graph = ggg.clone();
+                        ggg.precompute_euclidean_weights();
 
                         if let Some(path) = ggg.shortest_path(primal_u, primal_v) {
                             let mut realized_path = vec![];
@@ -1020,13 +919,12 @@ impl Primalization {
     }
 }
 
-pub fn evaluate(primalization: &Primalization) -> Option<(f32, f32)> {
-    let mut face_to_alignment = vec![];
-    let mut face_to_flatness = vec![];
-    let mut face_to_area = vec![];
+pub fn evaluate(primalization: &Primalization) -> Option<Evaluation> {
+    let mut face_to_area = HashMap::new();
+    let mut face_to_fidelity = HashMap::new();
 
-    let mut patch_to_rectangularity = vec![];
-    let mut patch_to_area = vec![];
+    let mut patch_to_area = HashMap::new();
+    let mut patch_to_rectangularity = HashMap::new();
 
     for patch_id in 0..primalization.patch_graph.faces.len() {
         let surface = primalization.patch_to_surface[patch_id].clone().unwrap();
@@ -1039,26 +937,24 @@ pub fn evaluate(primalization: &Primalization) -> Option<(f32, f32)> {
         let positive = dir.unwrap().to_vector().dot(avg_normal).signum();
         let direction = dir.unwrap().to_vector() * positive;
 
-        let mut areas = vec![];
-        let mut flatness_devs = vec![];
-        let mut alignment_devs = vec![];
+        let mut tot_area = 0.;
+
         for subface in &surface.faces {
-            let flatness_dev =
-                compute_deviation(subface.face_id, &primalization.granulated_mesh, avg_normal);
-            flatness_devs.push(flatness_dev);
-
-            let alignment_dev =
-                compute_deviation(subface.face_id, &primalization.granulated_mesh, direction);
-            alignment_devs.push(alignment_dev);
-
             let area = primalization
                 .granulated_mesh
                 .get_area_of_face(subface.face_id);
-            areas.push(area);
+            face_to_area.insert(subface.face_id, area);
+            tot_area += area;
 
-            face_to_alignment.push(alignment_dev);
-            face_to_flatness.push(flatness_dev);
-            face_to_area.push(area);
+            let n_t = primalization
+                .granulated_mesh
+                .get_normal_of_face(subface.face_id);
+            let s = direction;
+
+            let angle = n_t.angle_between(s);
+            let exp = (-4. * (angle - std::f32::consts::FRAC_PI_2));
+            let fidelity = 1. / (1. + std::f32::consts::E.powf(exp));
+            face_to_fidelity.insert(subface.face_id, fidelity);
         }
 
         // compute Jacobian of the patch
@@ -1070,73 +966,32 @@ pub fn evaluate(primalization: &Primalization) -> Option<(f32, f32)> {
         assert!(corners.len() == 4);
 
         // check whether corners make right (90 degree) angles
-        let corner0 = ((corner_positions[1] - corner_positions[0])
-            .angle_between(corner_positions[3] - corner_positions[0])
-            - std::f32::consts::FRAC_PI_2)
-            .sin()
-            .abs();
+        let mut corner_scores = vec![];
+        for (A, B, C) in [(0, 1, 3), (1, 2, 0), (2, 3, 1), (3, 0, 2)] {
+            let v1 = corner_positions[B] - corner_positions[A];
+            let v2 = corner_positions[C] - corner_positions[A];
+            let angle = v1.angle_between(v2);
+            let straightness = angle.cos().powf(2.);
+            corner_scores.push(straightness);
+        }
 
-        let corner1 = ((corner_positions[2] - corner_positions[1])
-            .angle_between(corner_positions[0] - corner_positions[1])
-            - std::f32::consts::FRAC_PI_2)
-            .sin()
-            .abs();
+        let worst_score = corner_scores
+            .into_iter()
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap();
 
-        let corner2 = ((corner_positions[3] - corner_positions[2])
-            .angle_between(corner_positions[1] - corner_positions[2])
-            - std::f32::consts::FRAC_PI_2)
-            .sin()
-            .abs();
-
-        let corner3 = ((corner_positions[0] - corner_positions[3])
-            .angle_between(corner_positions[2] - corner_positions[3])
-            - std::f32::consts::FRAC_PI_2)
-            .sin()
-            .abs();
-
-        let rectangularity = (corner0 + corner1 + corner2 + corner3) / 4.;
-
-        let surface_area = areas.iter().sum::<f32>();
-
-        patch_to_rectangularity.push(rectangularity);
-        patch_to_area.push(surface_area);
+        patch_to_rectangularity.insert(patch_id, worst_score);
+        patch_to_area.insert(patch_id, tot_area);
     }
 
-    let mut face_to_score = vec![];
-    let mut face_to_score_normalized = vec![];
-    for face_id in 0..face_to_alignment.len() {
-        let alignment = face_to_alignment[face_id];
-        let flatness = face_to_flatness[face_id];
-        let area = face_to_area[face_id];
+    let evaluation = Evaluation {
+        face_to_area: face_to_area.clone(),
+        face_to_fidelity: face_to_fidelity.clone(),
+        patch_to_area: patch_to_area.clone(),
+        patch_to_angle: patch_to_rectangularity.clone(),
+    };
 
-        face_to_score.push((alignment * 1.0 + flatness * 0.0));
-        face_to_score_normalized.push((alignment * 1.0 + flatness * 0.0) * area);
-    }
-
-    let face_avg_score =
-        face_to_score_normalized.iter().sum::<f32>() / face_to_area.iter().sum::<f32>();
-
-    let mut patch_to_score = vec![];
-    let mut patch_to_score_normalized = vec![];
-    for patch_id in 0..patch_to_area.len() {
-        let area = patch_to_area[patch_id];
-        let rectangularity = patch_to_rectangularity[patch_id];
-
-        patch_to_score.push(rectangularity);
-        patch_to_score_normalized.push(rectangularity * area);
-    }
-
-    let patch_avg_score =
-        patch_to_score_normalized.iter().sum::<f32>() / patch_to_area.iter().sum::<f32>();
-
-    let total_score = face_avg_score + patch_avg_score;
-
-    if total_score.is_nan() {
-        println!("Failed to connect primal vertices [score]");
-        return None;
-    }
-
-    return Some((face_avg_score, patch_avg_score * 0.1));
+    return Some(evaluation);
 }
 
 // Derivatives of shape functions with respect to xi and eta
@@ -1155,14 +1010,6 @@ pub fn dphi(n: f32, z: f32) -> Matrix4x2<f32> {
     m
 }
 
-pub fn jacobian(n: f32, z: f32, quad: &Matrix4x2<f32>) -> Matrix2<f32> {
-    dphi(n, z).transpose() * quad
-}
-
-pub fn det_jacobian(n: f32, z: f32, quad: &Matrix4x2<f32>) -> f32 {
-    jacobian(n, z, quad).determinant()
-}
-
 // Given a surface, compute the average normal of the surface (weighted by the area of the faces)
 pub fn compute_average_normal(surface: &Surface, mesh: &Doconeli) -> Vec3 {
     let mut normal = Vec3::splat(0.);
@@ -1175,26 +1022,6 @@ pub fn compute_average_normal(surface: &Surface, mesh: &Doconeli) -> Vec3 {
     }
 
     normal / total_area
-}
-
-pub fn compute_deviation(face_id: usize, mesh: &Doconeli, vector: Vec3) -> f32 {
-    (mesh.get_normal_of_face(face_id).angle_between(vector) / 2.)
-        .sin()
-        .powf(4.)
-}
-
-// Given a surface, and a vector, compute the average deviation of the normals of the faces to the vector
-pub fn compute_average_deviation(surface: &Surface, mesh: &Doconeli, vector: Vec3) -> f32 {
-    let mut deviation = 0.;
-    let mut total_area = 0.;
-
-    for subface in &surface.faces {
-        let area = mesh.get_area_of_face(subface.face_id);
-        total_area += area;
-        deviation += compute_deviation(subface.face_id, mesh, vector) * area;
-    }
-
-    deviation / total_area
 }
 
 // A solution is a collection of paths.
@@ -1808,14 +1635,7 @@ impl MeshResource {
     }
 
     pub fn add_loop(&self, configuration: &mut Configuration) -> Option<(Solution, Primalization)> {
-        let principal_direction = configuration.choose_direction;
-
         let mut timer = Timer::new();
-
-        // Dual graph of mesh, with directed weighted edges. Edge weights see paper.
-        let mut graph = self.graphs[principal_direction as usize].clone();
-        graph
-            .precompute_angular_loopy_weights(principal_direction.to_vector(), configuration.gamma);
 
         let mut vertex_graph = Graph::new(&self.mesh);
 
@@ -1824,18 +1644,73 @@ impl MeshResource {
         //          - add only in certain region / between previous loops... decide starting points etc...
         let mut all_edges = (0..self.mesh.edges.len()).collect();
         let mut all_vertices = (0..self.mesh.vertices.len()).collect();
+
+        let mut subset_vertices = vec![];
+        let mut principal_direction = configuration.choose_direction;
+
         // only look in the region with lots of curvature
         if !configuration.find_global {
-            // grab region (their vertices)
-            let components = self.get_components_between_loops(principal_direction);
-            let target_component = self.components_to_singularity_spread(
-                components.clone(),
-                principal_direction,
-                configuration.percent_singularities,
-            )[configuration.choose_component % components.len()]
-            .0;
-            let subset_vertices = components[target_component].clone();
+            (subset_vertices, principal_direction) = if self.evaluation.face_to_fidelity.len() == 0
+            {
+                // grab region (their vertices)
+                let components = self.get_components_between_loops(principal_direction);
+                (
+                    components[self.components_to_singularity_spread(
+                        components.clone(),
+                        principal_direction,
+                        configuration.percent_singularities,
+                    )[configuration.choose_component % components.len()]
+                    .0]
+                        .clone(),
+                    principal_direction,
+                )
+            } else {
+                let mut components = vec![];
+                for candidate_direction in [
+                    PrincipalDirection::X,
+                    PrincipalDirection::Y,
+                    PrincipalDirection::Z,
+                ] {
+                    for component in self.get_components_between_loops(candidate_direction) {
+                        components.push((component, candidate_direction));
+                    }
+                }
+                let mut component_to_score = vec![];
+                for component_i in 0..components.len() {
+                    let mut component_score = 0.;
+                    let mut component_area = 0.;
+                    for &face_i in &components[component_i].0 {
+                        component_score += self.evaluation.face_to_fidelity[&face_i]
+                            * self.evaluation.face_to_area[&face_i];
+                        component_area += self.evaluation.face_to_area[&face_i];
+                    }
+                    component_to_score.push((component_score, component_i));
+                }
 
+                // sort by score (get index)
+                let component_to_score = component_to_score
+                    .into_iter()
+                    .sorted_by(|a, b| b.0.partial_cmp(&a.0).unwrap())
+                    .collect_vec();
+
+                (
+                    components
+                        [component_to_score[configuration.choose_component % components.len()].1]
+                        .0
+                        .clone(),
+                    components
+                        [component_to_score[configuration.choose_component % components.len()].1]
+                        .1,
+                )
+            };
+        }
+
+        // Dual graph of mesh, with directed weighted edges. Edge weights see paper.
+        let mut graph = self.graphs[principal_direction as usize].clone();
+        graph
+            .precompute_angular_loopy_weights(principal_direction.to_vector(), configuration.gamma);
+
+        if !configuration.find_global {
             // vertices to remove
             let vertices_to_remove = (0..self.mesh.vertices.len())
                 .into_iter()
