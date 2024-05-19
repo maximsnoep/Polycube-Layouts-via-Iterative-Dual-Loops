@@ -753,8 +753,6 @@ pub fn handle_events(
                 let number_of_removals = 15;
                 
                 let direction_choices = [PrincipalDirection::X, PrincipalDirection::Y, PrincipalDirection::Z];
-                let component_choices = (0..20).into_iter().collect_vec();
-                let component_dist = WeightedIndex::new(&[5, 5, 5, 5, 4, 4, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1]).unwrap();
                 let algo_choices = [LoopScoring::SingularitySeparationCount, LoopScoring::SingularitySeparationSpread, LoopScoring::PathLength, LoopScoring::LoopDistribution];
                 let path_weight_choices = 1.0..=1.0;
                 let gamma_choices = 2.5..7.5;
@@ -781,8 +779,10 @@ pub fn handle_events(
                             let mut scores = vec![local_score];
 
                             for step in 0..number_of_loops {
+                                let nr_of_components = local_mesh_resmut.get_components_between_loops(PrincipalDirection::X).len() + local_mesh_resmut.get_components_between_loops(PrincipalDirection::Y).len() + local_mesh_resmut.get_components_between_loops(PrincipalDirection::Z).len();
+
                                 local_configuration.choose_direction = direction_choices[rand.gen_range(0..3)];
-                                local_configuration.choose_component = component_choices[component_dist.sample(&mut rand)];
+                                local_configuration.choose_component = rand.gen_range(0..nr_of_components);
                                 local_configuration.loop_scoring_scheme = algo_choices[rand.gen_range(0..algo_choices.len())];
                                 local_configuration.path_weight = rand.gen_range(path_weight_choices.clone());
                                 local_configuration.gamma = rand.gen_range(gamma_choices.clone());
