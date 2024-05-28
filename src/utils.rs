@@ -565,6 +565,7 @@ pub fn get_bevy_mesh_of_mesh(
     mesh: &Doconeli,
     color_type: ColorType,
     configuration: &Configuration,
+    color_map: Vec<Color>,
 ) -> Mesh {
     let mut mesh_triangle_list = Mesh::new(PrimitiveTopology::TriangleList);
     let mut vertex_positions = Vec::with_capacity(mesh.faces.len() * 3);
@@ -572,24 +573,10 @@ pub fn get_bevy_mesh_of_mesh(
     let mut vertex_colors = Vec::with_capacity(mesh.faces.len() * 3);
 
     for face_id in 0..mesh.faces.len() {
-        let color = match color_type {
-            ColorType::Static(c) => c,
-            ColorType::Labeling => match mesh.faces[face_id].label {
-                Some(0) => COLOR_PRIMARY_X,
-                Some(1) => COLOR_PRIMARY_X_LIGHT,
-                Some(2) => COLOR_PRIMARY_Y,
-                Some(3) => COLOR_PRIMARY_Y_LIGHT,
-                Some(4) => COLOR_PRIMARY_Z,
-                Some(5) => COLOR_PRIMARY_Z_LIGHT,
-                _ => Color::WHITE,
-            },
-            _ => mesh.faces[face_id].color,
-        };
-
         for vertex_id in mesh.get_vertices_of_face(face_id) {
             vertex_positions.push(mesh.get_position_of_vertex(vertex_id));
             vertex_normals.push(mesh.vertices[vertex_id].normal);
-            vertex_colors.push(color.as_rgba_f32());
+            vertex_colors.push(color_map[face_id].as_rgba_f32());
         }
     }
 

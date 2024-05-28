@@ -31,7 +31,7 @@ use std::io::BufReader;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use strum_macros::EnumIter;
-use utils::{get_color, get_random_color, transform_coordinates};
+use utils::{get_color, get_random_color, transform_coordinates, COLOR_PRIMARY_X, COLOR_PRIMARY_X_LIGHT, COLOR_PRIMARY_Y, COLOR_PRIMARY_Y_LIGHT, COLOR_PRIMARY_Z, COLOR_PRIMARY_Z_LIGHT};
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -144,6 +144,7 @@ pub enum RenderType {
     PatchesInnerMesh,
     NaiveLabeling,
     Polycube,
+    Region,
     DistortionAlignment,
     DistortionJacobian,
     Nothing,
@@ -157,7 +158,8 @@ pub enum ColorType {
     DirectionSecondary,
     DistortionAlignment,
     DistortionJacobian,
-    Labeling
+    Labeling,
+    Region
 }
 impl Default for ColorType {
     fn default() -> Self {
@@ -327,7 +329,12 @@ pub fn handle_events(
                             configuration.nr_of_edges = mesh_resmut.mesh.edges.len() / 2; // dcel -> single edge
                             configuration.nr_of_faces = mesh_resmut.mesh.faces.len();
 
-                            let mesh = get_bevy_mesh_of_mesh(&mesh_resmut.mesh, ColorType::Static(configuration.color_foreground.into()), &configuration);
+                            let mut color_map = vec![];
+                        for face_id in 0..mesh_resmut.mesh.faces.len() {
+                            color_map.push(configuration.color_foreground.into());
+                        }
+
+                        let mesh = get_bevy_mesh_of_mesh(&mesh_resmut.mesh, ColorType::Static(configuration.color_foreground.into()), &configuration, color_map);
                             let aabb = mesh.compute_aabb().unwrap();
                             configuration.scale = 10. * (1. / aabb.half_extents.max_element());
                             configuration.translation = (-configuration.scale * aabb.center).into();
@@ -351,7 +358,12 @@ pub fn handle_events(
                         configuration.nr_of_edges = mesh_resmut.mesh.edges.len() / 2; // dcel -> single edge
                         configuration.nr_of_faces = mesh_resmut.mesh.faces.len();
 
-                        let mesh = get_bevy_mesh_of_mesh(&mesh_resmut.mesh, ColorType::Static(configuration.color_foreground.into()), &configuration);
+                        let mut color_map = vec![];
+                        for face_id in 0..mesh_resmut.mesh.faces.len() {
+                            color_map.push(configuration.color_foreground.into());
+                        }
+
+                        let mesh = get_bevy_mesh_of_mesh(&mesh_resmut.mesh, ColorType::Static(configuration.color_foreground.into()), &configuration, color_map);
                         let aabb = mesh.compute_aabb().unwrap();
                         configuration.scale = 10. * (1. / aabb.half_extents.max_element());
                         configuration.translation = (-configuration.scale * aabb.center).into();
@@ -728,7 +740,14 @@ fn update_mesh(
     check_mesh(&mesh_resmut);
 
     let mesh = match configuration.render_type {
-        RenderType::Original => get_bevy_mesh_of_mesh(&mesh_resmut.mesh, ColorType::Static(configuration.color_foreground.into()), &configuration),
+        RenderType::Original => {
+            let mut color_map = vec![];
+            for face_id in 0..mesh_resmut.mesh.faces.len() {
+                color_map.push(configuration.color_foreground.into());
+            }
+         
+            get_bevy_mesh_of_mesh(&mesh_resmut.mesh, ColorType::Static(configuration.color_foreground.into()), &configuration, color_map)
+        },
         RenderType::RegionsMesh => get_bevy_mesh_of_graph(&mesh_resmut.sol.intersection_graph, ColorType::Static(Color::BLACK), &configuration),
         RenderType::PatchesMesh => {
             if configuration.black {
@@ -744,7 +763,23 @@ fn update_mesh(
                 get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.patch_graph, &mesh_resmut.primalization.granulated_mesh,ColorType::DirectionPrimary, &configuration, &mesh_resmut.evaluation)
             }
         },
-        RenderType::NaiveLabeling => get_bevy_mesh_of_mesh(&mesh_resmut.mesh, ColorType::Labeling, &configuration),
+        RenderType::NaiveLabeling => {
+            let mut color_map = vec![];
+            for face_id in 0..mesh_resmut.mesh.faces.len() {
+                let color = match mesh_resmut.mesh.faces[face_id].label {
+                        Some(0) => COLOR_PRIMARY_X,
+                        Some(1) => COLOR_PRIMARY_X_LIGHT,
+                        Some(2) => COLOR_PRIMARY_Y,
+                        Some(3) => COLOR_PRIMARY_Y_LIGHT,
+                        Some(4) => COLOR_PRIMARY_Z,
+                        Some(5) => COLOR_PRIMARY_Z_LIGHT,
+                        _ => Color::WHITE,
+              
+                };
+                color_map.push(color);
+            }
+            get_bevy_mesh_of_mesh(&mesh_resmut.mesh, ColorType::Labeling, &configuration, color_map)
+        },
         RenderType::DistortionAlignment => {
             get_bevy_mesh_of_regions(&mesh_resmut.primalization.patch_to_surface.clone().into_iter().flatten().collect_vec(), &mesh_resmut.primalization.patch_graph, &mesh_resmut.primalization.granulated_mesh,ColorType::DistortionAlignment, &configuration, &mesh_resmut.evaluation)
         },
@@ -758,10 +793,84 @@ fn update_mesh(
                 get_bevy_mesh_of_graph(&mesh_resmut.primalization.polycube_graph, ColorType::DirectionPrimary, &configuration)  
             }  
         },
+        RenderType::Region => {
+            
+                let (subset_vertices, principal_direction) = if mesh_resmut.evaluation.face_to_fidelity.len() == 0
+                {
+                    // grab region (their vertices)
+                    let mut components = vec![];
+                    for candidate_direction in [
+                        PrincipalDirection::X,
+                        PrincipalDirection::Y,
+                        PrincipalDirection::Z,
+                    ] {
+                        for component in mesh_resmut.get_components_between_loops(candidate_direction) {
+                            components.push((component, candidate_direction));
+                        }
+                    }
+                    components[configuration.choose_component % components.len()].clone()
+                } else {
+                    let mut components = vec![];
+                    for candidate_direction in [
+                        PrincipalDirection::X,
+                        PrincipalDirection::Y,
+                        PrincipalDirection::Z,
+                    ] {
+                        for component in mesh_resmut.get_components_between_loops(candidate_direction) {
+                            components.push((component, candidate_direction));
+                        }
+                    }
+                    let mut component_to_score = vec![];
+                    for component_i in 0..components.len() {
+                        let mut component_score = 0.;
+                        let mut component_area = 0.;
+                        for &face_i in &components[component_i].0 {
+                            component_score += mesh_resmut.evaluation.face_to_fidelity[&face_i]
+                                * mesh_resmut.evaluation.face_to_area[&face_i];
+                            component_area += mesh_resmut.evaluation.face_to_area[&face_i];
+                        }
+                        component_to_score.push((component_score, component_i));
+                    }
+        
+                    // sort by score (get index)
+                    let component_to_score = component_to_score
+                        .into_iter()
+                        .sorted_by(|a, b| b.0.partial_cmp(&a.0).unwrap())
+                        .collect_vec();
+        
+                    (
+                        components[component_to_score[configuration.choose_component % components.len()].1]
+                            .0
+                            .clone(),
+                        components[component_to_score[configuration.choose_component % components.len()].1]
+                            .1,
+                    )
+                };
         
 
+        
+                
+            
+            let mut color_map = vec![];
+            'outer: for face_id in 0..mesh_resmut.mesh.faces.len() {
+                for vertex_id in mesh_resmut.mesh.get_vertices_of_face(face_id) {
+                    if subset_vertices.contains(&vertex_id) {
+                        let color = match principal_direction {
+                            PrincipalDirection::X => configuration.color_secondary1.into(),
+                            PrincipalDirection::Y => configuration.color_secondary2.into(),
+                            PrincipalDirection::Z => configuration.color_secondary3.into(),
+                        };
+                        color_map.push(color);
+                        continue 'outer;
+                    }
+                }
+                color_map.push(configuration.color_foreground.into());                
+            }
+
+
+            get_bevy_mesh_of_mesh(&mesh_resmut.mesh, ColorType::Region, &configuration, color_map)
+        },
         RenderType::Nothing => return,
-        _ => get_bevy_mesh_of_mesh(&mesh_resmut.mesh, ColorType::Static(configuration.color_foreground.into()), &configuration),
     };
 
     // Spawn new mesh
@@ -947,67 +1056,6 @@ fn draw_gizmos(
             color,
         );
     }
-
-    if configuration.draw_next_component {
-
-
-        let mut components = vec![];
-                for candidate_direction in [
-                    PrincipalDirection::X,
-                    PrincipalDirection::Y,
-                    PrincipalDirection::Z,
-                ] {
-                    for component in mesh_resmut.get_components_between_loops(candidate_direction) {
-                        components.push((component, candidate_direction));
-                    }
-                }
-                let mut component_to_score = vec![];
-                for component_i in 0..components.len() {
-                    let mut component_score = 0.;
-                    let mut component_area = 0.;
-                    for &face_i in &components[component_i].0 {
-                        component_score += mesh_resmut.evaluation.face_to_fidelity[&face_i]
-                            * mesh_resmut.evaluation.face_to_area[&face_i];
-                        component_area += mesh_resmut.evaluation.face_to_area[&face_i];
-                    }
-                    component_to_score.push((component_score, component_i));
-                }
-
-                // sort by score (get index)
-                let component_to_score = component_to_score
-                    .into_iter()
-                    .sorted_by(|a, b| b.0.partial_cmp(&a.0).unwrap())
-                    .collect_vec();
-
-                let subset_vertices = 
-                    components
-                        [component_to_score[configuration.choose_component % components.len()].1]
-                        .0
-                        .clone();
-                let direction = components
-                    [component_to_score[configuration.choose_component % components.len()].1]
-                    .1;
-
-        for vertex_id in subset_vertices {
-
-            gizmos.line(
-                transform_coordinates(
-                    configuration.translation,
-                    configuration.scale,
-                    mesh_resmut.mesh.get_position_of_vertex(vertex_id),
-                ),
-                transform_coordinates(
-                    configuration.translation,
-                    configuration.scale,
-                    mesh_resmut.mesh.get_position_of_vertex(vertex_id) + mesh_resmut.mesh.get_normal_of_vertex(vertex_id) * 0.02,
-                ),
-                get_color(direction, false, &configuration),
-            );
-
-        }
-
-    }
-
 }
 
 pub fn draw_vertices(

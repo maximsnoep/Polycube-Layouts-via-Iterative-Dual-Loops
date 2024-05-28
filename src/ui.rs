@@ -262,10 +262,9 @@ fn ui_algorithm_info(
                 ));
                 if ui.button(">>").clicked() {
                     configuration.choose_component += 1;
+                    mesh_resmut.as_mut();
                 };
             });
-
-            ui.checkbox(&mut configuration.draw_next_component, "highlight zone");
 
             if ui.button("add loop to zone (if valid)").clicked() {
                 ev_writer.send(ActionEvent::AddLoop);
